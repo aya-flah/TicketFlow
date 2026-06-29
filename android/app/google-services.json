@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "371787124672",
+    "project_id": "ticketflow-1d36f",
+    "storage_bucket": "ticketflow-1d36f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:371787124672:android:23324fa27aad9093210225",
+        "android_client_info": {
+          "package_name": "com.example.ticketflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9rpz3xKrv-QCSo1RmfWjtvqgyPylLF6Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

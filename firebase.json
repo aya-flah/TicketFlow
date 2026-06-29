@@ -1,0 +1,42 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "ticketflow-1d36f",
+          "appId": "1:371787124672:android:23324fa27aad9093210225",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ticketflow-1d36f",
+          "configurations": {
+            "android": "1:371787124672:android:23324fa27aad9093210225",
+            "ios": "1:371787124672:ios:0fc0408ef756131e210225",
+            "macos": "1:371787124672:ios:0fc0408ef756131e210225",
+            "web": "1:371787124672:web:e641823bb12e566f210225",
+            "windows": "1:371787124672:web:6081552d8fdf34a9210225"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}
