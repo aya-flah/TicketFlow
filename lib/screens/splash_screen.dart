@@ -1,6 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../constants/app_colors.dart';
+import 'home_screen.dart';
 import 'welcome_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -21,8 +24,6 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
-
-    // Hide status bar for a full-screen feel
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
 
     _controller = AnimationController(
@@ -30,31 +31,24 @@ class _SplashScreenState extends State<SplashScreen>
       duration: const Duration(milliseconds: 1800),
     );
 
-    // Logo scales up from 0.4 → 1.0
     _logoScale = Tween<double>(begin: 0.4, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
         curve: const Interval(0.0, 0.6, curve: Curves.elasticOut),
       ),
     );
-
-    // Logo fades in
     _logoOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
         curve: const Interval(0.0, 0.40, curve: Curves.easeIn),
       ),
     );
-
-    // Tagline fades in after logo
     _taglineFade = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
         curve: const Interval(0.55, 0.85, curve: Curves.easeIn),
       ),
     );
-
-    // Tagline slides up slightly
     _taglineSlide =
         Tween<Offset>(begin: const Offset(0, 0.4), end: Offset.zero).animate(
       CurvedAnimation(
@@ -65,22 +59,50 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller.forward();
 
-    // Navigate to WelcomeScreen after 2.8 s
-    Future.delayed(const Duration(milliseconds: 2800), _navigateNext);
+    // Wait for animation to finish, then check auth
+    Future.delayed(const Duration(milliseconds: 2200), _checkAuth);
   }
 
-  void _navigateNext() {
+  Future<void> _checkAuth() async {
     if (!mounted) return;
-    // Restore system UI before leaving
+
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      // Not logged in → Welcome screen
+      _goTo(const WelcomeScreen());
+      return;
+    }
+
+    // Logged in → fetch role from Firestore then go home
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      final name = doc.data()?['name'] as String? ?? '';
+      final role = doc.data()?['role'] as String? ?? '';
+
+      if (!mounted) return;
+      _goTo(HomeScreen(userName: name.isNotEmpty ? name : user.email ?? '',
+          role: role));
+    } catch (_) {
+      // Firestore unreachable — still go home with email as fallback
+      if (!mounted) return;
+      _goTo(HomeScreen(userName: user.email ?? '', role: ''));
+    }
+  }
+
+  void _goTo(Widget screen) {
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 600),
-        pageBuilder: (_, __, ___) => const WelcomeScreen(),
-        transitionsBuilder: (_, animation, __, child) => FadeTransition(
-          opacity: animation,
-          child: child,
-        ),
+        pageBuilder: (_, __, ___) => screen,
+        transitionsBuilder: (_, animation, __, child) =>
+            FadeTransition(opacity: animation, child: child),
       ),
     );
   }
@@ -99,44 +121,25 @@ class _SplashScreenState extends State<SplashScreen>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              AppColors.darkNavy,
-              AppColors.navy,
-              AppColors.slateBlue,
-            ],
+            colors: [AppColors.darkNavy, AppColors.navy, AppColors.slateBlue],
             stops: [0.0, 0.55, 1.0],
           ),
         ),
         child: Stack(
           children: [
-            // Decorative circles – background depth
-            _buildDecoCircle(
-              alignment: const Alignment(-1.2, -1.3),
-              size: 320,
-              color: AppColors.slateBlue.withValues(alpha: 0.25),
-            ),
-            _buildDecoCircle(
-              alignment: const Alignment(1.4, 1.5),
-              size: 260,
-              color: AppColors.steelTeal.withValues(alpha: 0.20),
-            ),
-            _buildDecoCircle(
-              alignment: const Alignment(1.2, -0.9),
-              size: 140,
-              color: AppColors.skyBlue.withValues(alpha: 0.18),
-            ),
-            _buildDecoCircle(
-              alignment: const Alignment(-1.0, 1.1),
-              size: 100,
-              color: AppColors.softTeal.withValues(alpha: 0.22),
-            ),
+            _buildDecoCircle(const Alignment(-1.2, -1.3), 320,
+                AppColors.slateBlue.withValues(alpha: 0.25)),
+            _buildDecoCircle(const Alignment(1.4, 1.5), 260,
+                AppColors.steelTeal.withValues(alpha: 0.20)),
+            _buildDecoCircle(const Alignment(1.2, -0.9), 140,
+                AppColors.skyBlue.withValues(alpha: 0.18)),
+            _buildDecoCircle(const Alignment(-1.0, 1.1), 100,
+                AppColors.softTeal.withValues(alpha: 0.22)),
 
-            // Centre content
             Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Logo — scale + fade
                   AnimatedBuilder(
                     animation: _controller,
                     builder: (_, __) => FadeTransition(
@@ -145,18 +148,13 @@ class _SplashScreenState extends State<SplashScreen>
                         scale: _logoScale,
                         child: Hero(
                           tag: 'app_logo',
-                          child: Image.asset(
-                            'lib/image/logo.png',
-                            width: 200,
-                          ),
+                          child:
+                              Image.asset('lib/image/logo.png', width: 200),
                         ),
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 32),
-
-                  // Tagline — fade + slide
                   FadeTransition(
                     opacity: _taglineFade,
                     child: SlideTransition(
@@ -176,7 +174,8 @@ class _SplashScreenState extends State<SplashScreen>
                           Text(
                             'Resolve faster.',
                             style: TextStyle(
-                              color: AppColors.skyBlue.withValues(alpha: 0.95),
+                              color:
+                                  AppColors.skyBlue.withValues(alpha: 0.95),
                               fontSize: 18,
                               fontWeight: FontWeight.w600,
                               letterSpacing: 1.2,
@@ -190,7 +189,6 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
 
-            // Bottom loading indicator
             Positioned(
               bottom: 60,
               left: 0,
@@ -204,8 +202,7 @@ class _SplashScreenState extends State<SplashScreen>
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                        Colors.white.withValues(alpha: 0.50),
-                      ),
+                          Colors.white.withValues(alpha: 0.50)),
                     ),
                   ),
                 ),
@@ -217,20 +214,13 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 
-  Widget _buildDecoCircle({
-    required Alignment alignment,
-    required double size,
-    required Color color,
-  }) {
+  Widget _buildDecoCircle(Alignment alignment, double size, Color color) {
     return Align(
       alignment: alignment,
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-        ),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
       ),
     );
   }
