@@ -1,6 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../widgets/blob_background.dart';
+import 'home_screen.dart';
 import 'login_screen.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -16,6 +19,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  String? selectedRole; // 'agent' or 'manager'
   bool _agreeToTerms = false;
   bool _obscurePassword = true;
   bool _isLoading = false;
@@ -28,21 +32,89 @@ class _SignupScreenState extends State<SignupScreen> {
     super.dispose();
   }
 
-  void _submit() {
-    if (_formKey.currentState!.validate() && _agreeToTerms) {
-      setState(() => _isLoading = true);
-      // TODO: wire up auth
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _isLoading = false);
-      });
-    } else if (!_agreeToTerms) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please agree to the terms to continue.')),
+  // ── Firebase signup ──────────────────────────────────────────────────────────
+  Future<void> _submit() async {
+    final formValid = _formKey.currentState!.validate();
+
+    if (selectedRole == null) {
+      _showError('Please select a role (Agent or Manager).');
+      return;
+    }
+    if (!_agreeToTerms) {
+      _showError('Please agree to the terms to continue.');
+      return;
+    }
+    if (!formValid) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. Create Auth user
+      final credential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
       );
+
+      // 2. Save profile to Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(credential.user!.uid)
+          .set({
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'role': selectedRole,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+
+      // 3. Go to home
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => HomeScreen(
+            userName: _nameController.text.trim().split(' ').first,
+            role: selectedRole!,
+          ),
+        ),
+        (route) => false,
+      );
+    } on FirebaseAuthException catch (e) {
+      _showError(_authMessage(e.code));
+    } catch (e) {
+      _showError('Error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
+  String _authMessage(String code) {
+    switch (code) {
+      case 'email-already-in-use':
+        return 'An account already exists for this email.';
+      case 'invalid-email':
+        return 'That email address is not valid.';
+      case 'weak-password':
+        return 'Password too weak — use at least 6 characters.';
+      case 'network-request-failed':
+        return 'Network error. Check your connection.';
+      case 'operation-not-allowed':
+        return 'Email/password sign-up is not enabled.';
+      default:
+        return 'Sign-up failed ($code).';
+    }
+  }
+
+  void _showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: Colors.redAccent,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  // ── Build ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -52,14 +124,11 @@ class _SignupScreenState extends State<SignupScreen> {
           SafeArea(
             child: Column(
               children: [
-                // Back button + logo corner
-                _buildTopBar(context),
-
-                // Scrollable card
+                _topBar(context),
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
-                    child: _buildCard(),
+                    child: _card(),
                   ),
                 ),
               ],
@@ -70,7 +139,7 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildTopBar(BuildContext context) {
+  Widget _topBar(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -90,14 +159,14 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildCard() {
+  Widget _card() {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: AppColors.darkNavy.withValues(alpha: 0.30),
+            color: AppColors.darkNavy.withValues(alpha: 0.28),
             blurRadius: 30,
             offset: const Offset(0, 12),
           ),
@@ -117,16 +186,15 @@ class _SignupScreenState extends State<SignupScreen> {
                   color: AppColors.navy,
                   fontSize: 26,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 0.3,
                 ),
               ),
             ),
             const SizedBox(height: 28),
 
             // Full Name
-            _buildLabel('Full Name'),
+            _label('Full Name'),
             const SizedBox(height: 6),
-            _buildTextField(
+            _field(
               controller: _nameController,
               hint: 'Enter Full Name',
               icon: Icons.person_outline,
@@ -136,13 +204,13 @@ class _SignupScreenState extends State<SignupScreen> {
             const SizedBox(height: 18),
 
             // Email
-            _buildLabel('Email'),
+            _label('Email'),
             const SizedBox(height: 6),
-            _buildTextField(
+            _field(
               controller: _emailController,
               hint: 'Enter Email',
               icon: Icons.email_outlined,
-              keyboardType: TextInputType.emailAddress,
+              keyboard: TextInputType.emailAddress,
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Email is required';
                 if (!v.contains('@')) return 'Enter a valid email';
@@ -152,14 +220,14 @@ class _SignupScreenState extends State<SignupScreen> {
             const SizedBox(height: 18),
 
             // Password
-            _buildLabel('Password'),
+            _label('Password'),
             const SizedBox(height: 6),
-            _buildTextField(
+            _field(
               controller: _passwordController,
               hint: 'Enter Password',
               icon: Icons.lock_outline,
               obscure: _obscurePassword,
-              suffixIcon: IconButton(
+              suffix: IconButton(
                 icon: Icon(
                   _obscurePassword
                       ? Icons.visibility_off_outlined
@@ -176,6 +244,12 @@ class _SignupScreenState extends State<SignupScreen> {
                 return null;
               },
             ),
+            const SizedBox(height: 22),
+
+            // Role selector
+            _label('Role'),
+            const SizedBox(height: 10),
+            _roleSelector(),
             const SizedBox(height: 20),
 
             // Terms checkbox
@@ -197,15 +271,14 @@ class _SignupScreenState extends State<SignupScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: RichText(
-                    text: TextSpan(
-                      style: const TextStyle(
-                          color: Colors.black54, fontSize: 13),
+                    text: const TextSpan(
+                      style:
+                          TextStyle(color: Colors.black54, fontSize: 13),
                       children: [
-                        const TextSpan(
-                            text: 'I agree to the processing of '),
+                        TextSpan(text: 'I agree to the processing of '),
                         TextSpan(
                           text: 'Personal data',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.navy,
                             fontWeight: FontWeight.w600,
                           ),
@@ -218,29 +291,19 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
             const SizedBox(height: 28),
 
-            // Sign Up button
-            _buildPrimaryButton(
+            // Sign up button
+            _primaryBtn(
               label: 'Sign up',
               isLoading: _isLoading,
               onPressed: _submit,
             ),
-            const SizedBox(height: 28),
-
-            // Sign up with
-            const Center(
-              child: Text('Sign up with',
-                  style: TextStyle(color: Colors.black45, fontSize: 13)),
-            ),
-            const SizedBox(height: 16),
-            _buildSocialRow(),
             const SizedBox(height: 24),
 
             // Already have account
             Center(
               child: RichText(
                 text: TextSpan(
-                  style:
-                      const TextStyle(color: Colors.black54, fontSize: 14),
+                  style: const TextStyle(color: Colors.black54, fontSize: 14),
                   children: [
                     const TextSpan(text: 'Already have an account? '),
                     WidgetSpan(
@@ -270,29 +333,81 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildLabel(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        color: Colors.black54,
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
+  // ── Role selector ────────────────────────────────────────────────────────────
+  Widget _roleSelector() {
+    return Row(
+      children: [
+        Expanded(child: _roleOption('agent', 'Agent', Icons.support_agent)),
+        const SizedBox(width: 12),
+        Expanded(
+            child: _roleOption(
+                'manager', 'Manager', Icons.manage_accounts_outlined)),
+      ],
+    );
+  }
+
+  Widget _roleOption(String value, String label, IconData icon) {
+    final selected = selectedRole == value;
+    return GestureDetector(
+      onTap: () => setState(() => selectedRole = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding:
+            const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.navy.withValues(alpha: 0.08)
+              : AppColors.lightBlue.withValues(alpha: 0.20),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.navy : AppColors.lightBlue,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon,
+                size: 20,
+                color:
+                    selected ? AppColors.navy : AppColors.slateBlue),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? AppColors.navy : Colors.black54,
+                fontWeight:
+                    selected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildTextField({
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  Widget _label(String text) => Text(
+        text,
+        style: const TextStyle(
+            color: Colors.black54,
+            fontSize: 12,
+            fontWeight: FontWeight.w500),
+      );
+
+  Widget _field({
     required TextEditingController controller,
     required String hint,
     required IconData icon,
-    TextInputType keyboardType = TextInputType.text,
+    TextInputType keyboard = TextInputType.text,
     bool obscure = false,
-    Widget? suffixIcon,
+    Widget? suffix,
     String? Function(String?)? validator,
   }) {
     return TextFormField(
       controller: controller,
-      keyboardType: keyboardType,
+      keyboardType: keyboard,
       obscureText: obscure,
       validator: validator,
       style: const TextStyle(color: Colors.black87, fontSize: 14),
@@ -300,9 +415,9 @@ class _SignupScreenState extends State<SignupScreen> {
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.black38, fontSize: 14),
         prefixIcon: Icon(icon, color: AppColors.slateBlue, size: 20),
-        suffixIcon: suffixIcon,
+        suffixIcon: suffix,
         filled: true,
-        fillColor: AppColors.lightBlue.withValues(alpha: 0.25),
+        fillColor: AppColors.lightBlue.withValues(alpha: 0.20),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
@@ -323,13 +438,14 @@ class _SignupScreenState extends State<SignupScreen> {
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Colors.redAccent, width: 1.5),
+          borderSide:
+              const BorderSide(color: Colors.redAccent, width: 1.5),
         ),
       ),
     );
   }
 
-  Widget _buildPrimaryButton({
+  Widget _primaryBtn({
     required String label,
     required bool isLoading,
     required VoidCallback onPressed,
@@ -344,8 +460,7 @@ class _SignupScreenState extends State<SignupScreen> {
           foregroundColor: Colors.white,
           elevation: 4,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+              borderRadius: BorderRadius.circular(14)),
         ),
         child: isLoading
             ? const SizedBox(
@@ -358,53 +473,6 @@ class _SignupScreenState extends State<SignupScreen> {
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.bold)),
       ),
-    );
-  }
-
-  Widget _buildSocialRow() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _socialButton(
-          icon: Icons.facebook,
-          color: const Color(0xFF1877F2),
-        ),
-        const SizedBox(width: 16),
-        _socialButton(
-          icon: Icons.flutter_dash, // placeholder for Twitter/X
-          color: const Color(0xFF1DA1F2),
-        ),
-        const SizedBox(width: 16),
-        _socialButton(
-          icon: Icons.g_mobiledata_rounded,
-          color: const Color(0xFFDB4437),
-        ),
-        const SizedBox(width: 16),
-        _socialButton(
-          icon: Icons.apple,
-          color: Colors.black87,
-        ),
-      ],
-    );
-  }
-
-  Widget _socialButton({required IconData icon, required Color color}) {
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.white,
-        border: Border.all(color: AppColors.lightBlue, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.07),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Icon(icon, color: color, size: 26),
     );
   }
 }
