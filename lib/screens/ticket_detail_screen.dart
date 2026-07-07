@@ -12,7 +12,6 @@ import '../widgets/ticket_widgets.dart';
 
 class TicketDetailScreen extends StatefulWidget {
   final Ticket ticket;
-
   const TicketDetailScreen({super.key, required this.ticket});
 
   @override
@@ -20,12 +19,19 @@ class TicketDetailScreen extends StatefulWidget {
 }
 
 class _TicketDetailScreenState extends State<TicketDetailScreen> {
-  bool _actionLoading = false;
-
-  // Ensures classification runs at most once per screen open,
-  // regardless of StreamBuilder rebuilds.
+  // ── Flags ────────────────────────────────────────────────────────────────────
+  bool _actionLoading        = false;
   bool _classificationTriggered = false;
-  bool _classifying = false;
+  bool _classifying          = false;
+  bool _draftTriggered       = false;
+  bool _generatingDraft      = false;
+  bool _sendingReply         = false;
+
+  // ── Draft reply editor ───────────────────────────────────────────────────────
+  final _replyController = TextEditingController();
+
+  /// The original AI-generated text — used to detect edits.
+  String? _originalDraft;
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -33,44 +39,53 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
       .collection('tickets')
       .doc(widget.ticket.ticketId);
 
-  // ── On first load, trigger classification if needed ──────────────────────────
+  // ── initState ────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    // Use the ticket passed in to decide — the stream will keep it fresh.
-    if (widget.ticket.category == null) {
-      _triggerClassification(widget.ticket.message);
+    final t = widget.ticket;
+
+    // Trigger classification if needed
+    if (t.category == null) {
+      _classificationTriggered = true;
+      _classify(t.message);
+      return; // draft will be triggered after classification via StreamBuilder
+    }
+
+    // Ticket already classified — check if draft is needed
+    if (t.aiDraftReply == null && t.finalReply == null) {
+      _draftTriggered = true;
+      _generateDraft(t);
+    } else if (t.aiDraftReply != null && t.finalReply == null) {
+      // Draft already exists — load it into the editor
+      _originalDraft = t.aiDraftReply;
+      _replyController.text = t.aiDraftReply!;
     }
   }
 
-  void _triggerClassification(String message) {
-    if (_classificationTriggered) return;
-    _classificationTriggered = true;
-    // Run async without awaiting in initState
-    _classify(message);
+  @override
+  void dispose() {
+    _replyController.dispose();
+    super.dispose();
   }
 
-  // ── Gemini classification ─────────────────────────────────────────────────────
+  // ── Gemini: Classification ───────────────────────────────────────────────────
   Future<void> _classify(String message) async {
     if (!mounted) return;
     setState(() => _classifying = true);
 
     const allowedCategories = ['billing', 'bug', 'question', 'complaint'];
-    const allowedUrgencies = ['low', 'medium', 'high'];
+    const allowedUrgencies  = ['low', 'medium', 'high'];
     const allowedSentiments = ['angry', 'neutral', 'happy'];
-
-    // Retry up to 3 times for transient errors (503, 429)
-    const maxRetries = 3;
+    const maxRetries        = 3;
     Exception? lastError;
 
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // ── Call Gemini REST API ───────────────────────────────────────────────
         final uri = Uri.parse(
           'https://generativelanguage.googleapis.com/v1beta/models/'
           'gemini-2.5-flash-lite:generateContent?key=${ApiKeys.gemini}',
         );
-
         final prompt =
             'You are a support ticket classifier. Classify the following '
             'customer support message. Respond ONLY with a valid JSON object, '
@@ -80,119 +95,198 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
             '"sentiment": "angry" or "neutral" or "happy"}. '
             'Message: $message';
 
-        final response = await http
-            .post(
-              uri,
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'contents': [
-                  {
-                    'parts': [
-                      {'text': prompt}
-                    ]
-                  }
-                ],
-                'generationConfig': {
-                  'temperature': 0.1,
-                  'maxOutputTokens': 120,
-                },
-              }),
-            )
-            .timeout(const Duration(seconds: 20));
+        final resp = await http.post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [{'parts': [{'text': prompt}]}],
+            'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 120},
+          }),
+        ).timeout(const Duration(seconds: 20));
 
-        // Retry on transient server errors
-        if (response.statusCode == 503 || response.statusCode == 429) {
-          lastError = Exception(
-              'Gemini HTTP ${response.statusCode}: ${response.body}');
-          if (attempt < maxRetries) {
-            // Exponential backoff: 2s, 4s, 8s
-            await Future.delayed(Duration(seconds: 2 * attempt));
-            continue;
-          } else {
-            throw lastError;
-          }
+        if (resp.statusCode == 503 || resp.statusCode == 429) {
+          lastError = Exception('Gemini HTTP ${resp.statusCode}');
+          if (attempt < maxRetries) { await Future.delayed(Duration(seconds: 2 * attempt)); continue; }
+          throw lastError;
         }
+        if (resp.statusCode != 200) throw Exception('Gemini HTTP ${resp.statusCode}: ${resp.body}');
 
-        if (response.statusCode != 200) {
-          throw Exception(
-              'Gemini HTTP ${response.statusCode}: ${response.body}');
-        }
+        final decoded  = jsonDecode(resp.body) as Map<String, dynamic>;
+        String rawText = (decoded['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?) ?? '';
+        if (rawText.trim().isEmpty) throw Exception('Empty response');
 
-        // ── Parse response ─────────────────────────────────────────────────────
-        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-        String rawText =
-            (decoded['candidates']?[0]?['content']?['parts']?[0]?['text']
-                    as String?) ??
-                '';
-
-        if (rawText.trim().isEmpty) {
-          throw Exception('Empty response from Gemini');
-        }
-
-        // Strip markdown fences if present
         rawText = rawText.trim();
-        final fenceMatch =
-            RegExp(r'```(?:json)?\s*([\s\S]*?)```').firstMatch(rawText);
-        if (fenceMatch != null) rawText = fenceMatch.group(1)!.trim();
+        final fence = RegExp(r'```(?:json)?\s*([\s\S]*?)```').firstMatch(rawText);
+        if (fence != null) rawText = fence.group(1)!.trim();
 
-        final parsed = jsonDecode(rawText) as Map<String, dynamic>;
-
-        final category = parsed['category'] as String?;
-        final urgency = parsed['urgency'] as String?;
+        final parsed    = jsonDecode(rawText) as Map<String, dynamic>;
+        final category  = parsed['category']  as String?;
+        final urgency   = parsed['urgency']   as String?;
         final sentiment = parsed['sentiment'] as String?;
 
         if (!allowedCategories.contains(category) ||
-            !allowedUrgencies.contains(urgency) ||
+            !allowedUrgencies.contains(urgency)   ||
             !allowedSentiments.contains(sentiment)) {
           throw Exception('Invalid classification values: $parsed');
         }
 
-        // ── Write to Firestore ───────────────────────────────────────────────
         await _ref.update({
-          'category': category,
-          'urgency': urgency,
-          'sentiment': sentiment,
-          'aiClassifiedAt': FieldValue.serverTimestamp(),
+          'category'              : category,
+          'urgency'               : urgency,
+          'sentiment'             : sentiment,
+          'aiClassifiedAt'        : FieldValue.serverTimestamp(),
           'aiClassificationFailed': false,
         });
 
-        // Success — exit the retry loop
+        if (mounted) setState(() => _classifying = false);
         return;
+
       } catch (e) {
         lastError = e is Exception ? e : Exception(e.toString());
-        debugPrint('Classification attempt $attempt failed: $e');
-        if (attempt < maxRetries) {
-          await Future.delayed(Duration(seconds: 2 * attempt));
-        }
+        debugPrint('Classify attempt $attempt failed: $e');
+        if (attempt < maxRetries) await Future.delayed(Duration(seconds: 2 * attempt));
       }
-    } // end retry loop
+    }
 
-    // All retries exhausted — write fallback defaults
-    debugPrint('Classification failed after $maxRetries attempts: $lastError');
+    // Fallback
     try {
       await _ref.update({
-        'category': 'unclassified',
-        'urgency': 'medium',
-        'sentiment': 'neutral',
+        'category'              : 'unclassified',
+        'urgency'               : 'medium',
+        'sentiment'             : 'neutral',
         'aiClassificationFailed': true,
-        'aiClassifiedAt': FieldValue.serverTimestamp(),
+        'aiClassifiedAt'        : FieldValue.serverTimestamp(),
       });
     } catch (_) {}
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Classification failed — defaults applied.'),
-          backgroundColor: Colors.deepOrange,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      setState(() => _classifying = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Classification failed — defaults applied.'),
+        backgroundColor: Colors.deepOrange,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
-
-    if (mounted) setState(() => _classifying = false);
   }
 
-  // ── Firestore update helpers ─────────────────────────────────────────────────
+  // ── Gemini: Draft reply generation ───────────────────────────────────────────
+  Future<void> _generateDraft(Ticket t) async {
+    if (!mounted) return;
+    setState(() => _generatingDraft = true);
+
+    const maxRetries = 3;
+    Exception? lastError;
+
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        final uri = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/'
+          'gemini-2.5-flash-lite:generateContent?key=${ApiKeys.gemini}',
+        );
+
+        final prompt =
+            'You are a professional customer support agent. Write a helpful, '
+            'empathetic reply to the following customer support message. '
+            'The message has been classified as category: ${t.category}, '
+            'urgency: ${t.urgency}, sentiment: ${t.sentiment}. '
+            'Keep the reply concise (2-4 sentences), professional, and '
+            'directly address the customer\'s concern. Do not use placeholders '
+            'like [Name] or [Agent]. Sign off as \'The Support Team\'. '
+            'Respond with ONLY the reply text, no explanation, no subject line, '
+            'no formatting.';
+
+        final resp = await http.post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [{'parts': [{'text': prompt}]}],
+            'generationConfig': {'temperature': 0.7, 'maxOutputTokens': 300},
+          }),
+        ).timeout(const Duration(seconds: 25));
+
+        if (resp.statusCode == 503 || resp.statusCode == 429) {
+          lastError = Exception('Gemini HTTP ${resp.statusCode}');
+          if (attempt < maxRetries) { await Future.delayed(Duration(seconds: 2 * attempt)); continue; }
+          throw lastError;
+        }
+        if (resp.statusCode != 200) throw Exception('Gemini HTTP ${resp.statusCode}: ${resp.body}');
+
+        final decoded  = jsonDecode(resp.body) as Map<String, dynamic>;
+        final draftText = ((decoded['candidates']?[0]?['content']?['parts']?[0]?['text']) as String?)?.trim() ?? '';
+        if (draftText.isEmpty) throw Exception('Empty draft response');
+
+        await _ref.update({
+          'aiDraftReply'       : draftText,
+          'aiDraftGeneratedAt' : FieldValue.serverTimestamp(),
+        });
+
+        if (mounted) {
+          _originalDraft = draftText;
+          _replyController.text = draftText;
+          setState(() => _generatingDraft = false);
+        }
+        return;
+
+      } catch (e) {
+        lastError = e is Exception ? e : Exception(e.toString());
+        debugPrint('Draft generation attempt $attempt failed: $e');
+        if (attempt < maxRetries) await Future.delayed(Duration(seconds: 2 * attempt));
+      }
+    }
+
+    if (mounted) {
+      setState(() => _generatingDraft = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Draft generation failed. You can write your own reply.'),
+        backgroundColor: Colors.deepOrange,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // ── Send final reply ─────────────────────────────────────────────────────────
+  Future<void> _sendReply(String originalDraft) async {
+    final text = _replyController.text.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Reply cannot be empty.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    setState(() => _sendingReply = true);
+    try {
+      final wasEdited = text != originalDraft;
+      await _ref.update({
+        'finalReply'    : text,
+        'repliedAt'     : FieldValue.serverTimestamp(),
+        'repliedBy'     : _uid,
+        'draftWasEdited': wasEdited,
+        'status'        : 'resolved',
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Reply sent'),
+          backgroundColor: Color(0xFF4CAF50),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _sendingReply = false);
+    }
+  }
+
+  // ── Generic Firestore update ─────────────────────────────────────────────────
   Future<void> _update(Map<String, dynamic> data) async {
     setState(() => _actionLoading = true);
     try {
@@ -210,38 +304,22 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
     }
   }
 
-  Future<void> _assignToMe() => _update({
-        'assignedTo': _uid,
-        'status': 'assigned',
-      });
+  Future<void> _assignToMe() => _update({'assignedTo': _uid, 'status': 'assigned'});
+  Future<void> _transition(String s) => _update({'status': s});
 
-  Future<void> _transition(String newStatus) =>
-      _update({'status': newStatus});
-
-  // ── Fetch assigned agent name ────────────────────────────────────────────────
   Future<String> _fetchAgentName(String uid) async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
       return doc.data()?['name'] as String? ?? uid;
-    } catch (_) {
-      return uid;
-    }
+    } catch (_) { return uid; }
   }
 
-  // ── Date format ───────────────────────────────────────────────────────────────
   String _fmt(Timestamp? ts) {
     if (ts == null) return '—';
     final d = ts.toDate();
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${d.day} ${months[d.month - 1]} ${d.year}  '
-        '${d.hour.toString().padLeft(2, '0')}:'
-        '${d.minute.toString().padLeft(2, '0')}';
+        '${d.hour.toString().padLeft(2,'0')}:${d.minute.toString().padLeft(2,'0')}';
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────
@@ -255,141 +333,107 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         elevation: 0,
         title: Text(
           '#${widget.ticket.ticketId.substring(0, 8).toUpperCase()}',
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600),
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: _ref.snapshots(),
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting &&
-              !snap.hasData) {
-            return const Center(
-                child: CircularProgressIndicator(color: AppColors.navy));
+          if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            return const Center(child: CircularProgressIndicator(color: AppColors.navy));
           }
-          if (snap.hasError || !snap.hasData || !snap.data!.exists) {
+          if (snap.hasError) {
+            return Center(child: Text('Error: ${snap.error}',
+                style: const TextStyle(color: Colors.redAccent)));
+          }
+          if (!snap.hasData || !snap.data!.exists) {
             return const Center(child: Text('Ticket not found.'));
           }
 
           final ticket = Ticket.fromFirestore(snap.data!);
 
-          // If a fresh stream update shows category is now null again
-          // (shouldn't happen, but safety net), don't re-trigger.
+          // Safety net: trigger classification if not yet done
+          if (ticket.category == null && !_classificationTriggered) {
+            _classificationTriggered = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) => _classify(ticket.message));
+          }
+
+          // Once classification lands, trigger draft if needed
+          if (ticket.category != null &&
+              ticket.aiDraftReply == null &&
+              ticket.finalReply == null &&
+              !_draftTriggered &&
+              !_classifying) {
+            _draftTriggered = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) => _generateDraft(ticket));
+          }
+
+          // Sync draft into editor when Firestore delivers it
+          if (ticket.aiDraftReply != null &&
+              _originalDraft == null &&
+              ticket.finalReply == null) {
+            _originalDraft = ticket.aiDraftReply;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _replyController.text = ticket.aiDraftReply!;
+            });
+          }
+
           return _body(ticket);
         },
       ),
     );
   }
 
+  // ── Body ─────────────────────────────────────────────────────────────────────
   Widget _body(Ticket t) {
-    final sc = statusColor(t.status);
-    final uc = urgencyColor(t.urgency);
-
-    // While classifying show a "Classifying…" badge
-    final classifyingBadge = _classifying
-        ? _spinnerBadge()
-        : null;
-
-    final urgencyLabel = t.urgency != null
-        ? t.urgency![0].toUpperCase() + t.urgency!.substring(1)
-        : 'Not classified';
-    final categoryLabel = t.category != null
-        ? t.category![0].toUpperCase() + t.category!.substring(1)
-        : 'Not classified';
-    final sentimentLabel = t.sentiment != null
-        ? t.sentiment![0].toUpperCase() + t.sentiment!.substring(1)
-        : 'Not classified';
-
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Badges ─────────────────────────────────────────────────────────
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              TicketBadge(label: formatStatus(t.status), color: sc),
-              if (_classifying) ...[
-                classifyingBadge!,
-              ] else ...[
-                TicketBadge(
-                    label: urgencyLabel,
-                    color: uc,
-                    faint: t.urgency == null),
-                TicketBadge(
-                    label: categoryLabel,
-                    color: AppColors.steelTeal,
-                    faint: t.category == null),
-                TicketBadge(
-                    label: sentimentLabel,
-                    color: AppColors.slateBlue,
-                    faint: t.sentiment == null),
-              ],
-              if (t.isEscalated)
-                const TicketBadge(
-                    label: '⚠ Escalated', color: Color(0xFFF44336)),
-            ],
-          ),
+          _badgesSection(t),
           const SizedBox(height: 20),
-
-          // ── Meta info card ──────────────────────────────────────────────────
-          _infoCard([
-            _metaRow('Created', _fmt(t.createdAt)),
-            if (t.repliedAt != null) _metaRow('Replied', _fmt(t.repliedAt)),
-            if (t.slaDeadline != null)
-              _metaRow('SLA deadline', _fmt(t.slaDeadline)),
-            _metaRow(
-                'Ticket ID', t.ticketId.substring(0, 16).toUpperCase()),
-            _assignedRow(t.assignedTo),
-          ]),
+          _metaCard(t),
           const SizedBox(height: 20),
-
-          // ── Message ─────────────────────────────────────────────────────────
-          const SectionLabel('MESSAGE'),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.lightBlue),
-            ),
-            child: Text(
-              t.message,
-              style: const TextStyle(
-                  color: Colors.black87, fontSize: 15, height: 1.6),
-            ),
-          ),
+          _messageSection(t),
           const SizedBox(height: 24),
-
-          // ── Assign to me ─────────────────────────────────────────────────────
           if (t.assignedTo == null || t.assignedTo != _uid) ...[
-            const SectionLabel('ASSIGNMENT'),
-            ActionButton(
-              label: 'Assign to me',
-              color: AppColors.navy,
-              icon: Icons.person_add_outlined,
-              isLoading: _actionLoading,
-              onTap: _assignToMe,
-            ),
+            _assignSection(),
             const SizedBox(height: 20),
           ],
-
-          // ── Status machine actions ────────────────────────────────────────
           ..._stateButtons(t.status),
+          _replySection(t),
         ],
       ),
     );
   }
 
-  // "Classifying…" animated badge
-  Widget _spinnerBadge() => Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+  // ── Badges section ───────────────────────────────────────────────────────────
+  Widget _badgesSection(Ticket t) {
+    final sc = statusColor(t.status);
+    final uc = urgencyColor(t.urgency);
+    String cap(String? v) => v != null ? v[0].toUpperCase() + v.substring(1) : 'Not classified';
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        TicketBadge(label: formatStatus(t.status), color: sc),
+        if (_classifying)
+          _spinnerBadge('Classifying…')
+        else ...[
+          TicketBadge(label: cap(t.urgency),   color: uc,                  faint: t.urgency   == null),
+          TicketBadge(label: cap(t.category),  color: AppColors.steelTeal, faint: t.category  == null),
+          TicketBadge(label: cap(t.sentiment), color: AppColors.slateBlue, faint: t.sentiment == null),
+        ],
+        if (t.isEscalated)
+          const TicketBadge(label: '⚠ Escalated', color: Color(0xFFF44336)),
+      ],
+    );
+  }
+
+  Widget _spinnerBadge(String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
           color: Colors.grey.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(20),
@@ -399,69 +443,255 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: 10,
-              height: 10,
-              child: CircularProgressIndicator(
-                strokeWidth: 1.5,
-                color: Colors.grey.shade500,
-              ),
+              width: 10, height: 10,
+              child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey.shade500),
             ),
             const SizedBox(width: 6),
-            Text(
-              'Classifying…',
-              style: TextStyle(
-                  color: Colors.grey.shade500,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600),
-            ),
+            Text(label,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 11, fontWeight: FontWeight.w600)),
           ],
         ),
       );
 
-  // ── State machine ─────────────────────────────────────────────────────────────
+  // ── Meta card ────────────────────────────────────────────────────────────────
+  Widget _metaCard(Ticket t) => _infoCard([
+        _metaRow('Created',    _fmt(t.createdAt)),
+        if (t.repliedAt   != null) _metaRow('Replied',      _fmt(t.repliedAt)),
+        if (t.slaDeadline != null) _metaRow('SLA deadline', _fmt(t.slaDeadline)),
+        _metaRow('Ticket ID', t.ticketId.substring(0, 16).toUpperCase()),
+        _assignedRow(t.assignedTo),
+      ]);
+
+  // ── Message ──────────────────────────────────────────────────────────────────
+  Widget _messageSection(Ticket t) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('MESSAGE'),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.lightBlue),
+            ),
+            child: Text(t.message,
+                style: const TextStyle(color: Colors.black87, fontSize: 15, height: 1.6)),
+          ),
+        ],
+      );
+
+  // ── Assignment ───────────────────────────────────────────────────────────────
+  Widget _assignSection() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('ASSIGNMENT'),
+          ActionButton(
+            label: 'Assign to me',
+            color: AppColors.navy,
+            icon: Icons.person_add_outlined,
+            isLoading: _actionLoading,
+            onTap: _assignToMe,
+          ),
+        ],
+      );
+
+  // ── Reply section ─────────────────────────────────────────────────────────────
+  Widget _replySection(Ticket t) {
+    // ── Already sent ─────────────────────────────────────────────────────────
+    if (t.finalReply != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 8),
+          const SectionLabel('REPLY SENT'),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF4CAF50).withValues(alpha: 0.40)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t.finalReply!,
+                    style: const TextStyle(color: Colors.black87, fontSize: 14, height: 1.6)),
+                const SizedBox(height: 10),
+                Text(
+                  'Sent ${_fmt(t.repliedAt)}'
+                  '${t.draftWasEdited == true ? '  •  Edited from AI draft' : '  •  Sent as AI draft'}',
+                  style: const TextStyle(color: Colors.black38, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // ── Generating draft ──────────────────────────────────────────────────────
+    if (_generatingDraft) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SectionLabel('AI DRAFT REPLY'),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.lightBlue),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.slateBlue),
+                  ),
+                  const SizedBox(width: 12),
+                  Text('Generating draft reply…',
+                      style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── Draft ready or write own ──────────────────────────────────────────────
+    // Only show the reply editor if classification has completed
+    if (t.category == null) return const SizedBox.shrink();
+
+    final hasDraft = _originalDraft != null;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('AI DRAFT REPLY'),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.lightBlue),
+            ),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Editable reply text
+                TextField(
+                  controller: _replyController,
+                  maxLines: null,
+                  minLines: 4,
+                  maxLength: 1000,
+                  style: const TextStyle(
+                      color: Colors.black87, fontSize: 14, height: 1.6),
+                  decoration: InputDecoration(
+                    hintText: hasDraft
+                        ? 'Edit the AI draft or write your own…'
+                        : 'Write your reply here…',
+                    hintStyle: const TextStyle(color: Colors.black38, fontSize: 14),
+                    border: InputBorder.none,
+                    counterStyle:
+                        const TextStyle(color: Colors.black38, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Action buttons row
+          Row(
+            children: [
+              // "Write my own" clears editor without touching Firestore
+              if (hasDraft)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => setState(() {
+                      _replyController.clear();
+                    }),
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: const Text('Write my own'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.slateBlue,
+                      side: const BorderSide(color: AppColors.slateBlue),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              if (hasDraft) const SizedBox(width: 10),
+
+              // "Approve & Send"
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  onPressed: _sendingReply
+                      ? null
+                      : () => _sendReply(_originalDraft ?? ''),
+                  icon: _sendingReply
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.send_rounded, size: 16),
+                  label: Text(_sendingReply ? 'Sending…' : 'Approve & Send'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4CAF50),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── State machine buttons ────────────────────────────────────────────────────
   List<Widget> _stateButtons(String status) {
     const transitions = {
-      'assigned': [
-        ('in_progress', 'Start working', Icons.play_arrow_rounded,
-            Color(0xFFFFC107))
-      ],
-      'in_progress': [
-        ('resolved', 'Mark resolved', Icons.check_circle_outline,
-            Color(0xFF4CAF50))
-      ],
-      'resolved': [
-        ('reopened', 'Reopen', Icons.replay_rounded, Color(0xFFF44336))
-      ],
-      'reopened': [
-        ('in_progress', 'Start working', Icons.play_arrow_rounded,
-            Color(0xFFFFC107))
-      ],
+      'assigned'   : [('in_progress', 'Start working', Icons.play_arrow_rounded,   Color(0xFFFFC107))],
+      'in_progress': [('resolved',    'Mark resolved', Icons.check_circle_outline, Color(0xFF4CAF50))],
+      'resolved'   : [('reopened',    'Reopen',        Icons.replay_rounded,       Color(0xFFF44336))],
+      'reopened'   : [('in_progress', 'Start working', Icons.play_arrow_rounded,   Color(0xFFFFC107))],
     };
-
     final list = transitions[status];
     if (list == null || list.isEmpty) return [];
-
     return [
       const SectionLabel('ACTIONS'),
-      ...list.map((t) => Padding(
+      ...list.map((tr) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: ActionButton(
-              label: t.$2,
-              icon: t.$3,
-              color: t.$4,
+              label: tr.$2, icon: tr.$3, color: tr.$4,
               isLoading: _actionLoading,
-              onTap: () => _transition(t.$1),
+              onTap: () => _transition(tr.$1),
             ),
           )),
       const SizedBox(height: 8),
     ];
   }
 
-  // ── Info card ─────────────────────────────────────────────────────────────────
+  // ── Shared widgets ───────────────────────────────────────────────────────────
   Widget _infoCard(List<Widget> rows) => Container(
         width: double.infinity,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
@@ -470,8 +700,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         child: Column(
           children: rows
               .expand((w) => [w, const Divider(height: 16)])
-              .toList()
-            ..removeLast(),
+              .toList()..removeLast(),
         ),
       );
 
@@ -483,16 +712,12 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
               width: 110,
               child: Text(label,
                   style: const TextStyle(
-                      color: Colors.black45,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500)),
+                      color: Colors.black45, fontSize: 13, fontWeight: FontWeight.w500)),
             ),
             Expanded(
               child: Text(value,
                   style: const TextStyle(
-                      color: AppColors.darkNavy,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
+                      color: AppColors.darkNavy, fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ],
         ),
@@ -502,8 +727,7 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
     if (uid == null) return _metaRow('Assigned to', 'Unassigned');
     return FutureBuilder<String>(
       future: _fetchAgentName(uid),
-      builder: (_, snap) =>
-          _metaRow('Assigned to', snap.data ?? '…'),
+      builder: (_, snap) => _metaRow('Assigned to', snap.data ?? '…'),
     );
   }
 }
