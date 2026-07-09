@@ -3,8 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/notification_service.dart';
 import '../widgets/ticket_widgets.dart';
 import 'my_tickets_screen.dart';
+import 'notifications_screen.dart';
 import 'ticket_detail_screen.dart';
 import 'welcome_screen.dart';
 
@@ -73,6 +75,13 @@ class _HomeScreenState extends State<HomeScreen> {
         'repliedAt': null,
         'slaDeadline': null,
       });
+
+      // Notify all agents about the new ticket
+      await NotificationService.notifyAgentsNewTicket(
+        ticketId: ref.id,
+        message: message,
+      );
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Ticket created'),
@@ -385,6 +394,52 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
+          // ── Notification bell with live unread badge ────────────────────
+          StreamBuilder<int>(
+            stream: NotificationService.getUnreadCountStream(
+                FirebaseAuth.instance.currentUser?.uid ?? ''),
+            builder: (context, snap) {
+              final count = snap.data ?? 0;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.notifications_outlined,
+                        color: Colors.white, size: 22),
+                    tooltip: 'Notifications',
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const NotificationsScreen()),
+                    ),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFF44336),
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                            minWidth: 16, minHeight: 16),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
           // My Tickets shortcut
           IconButton(
             icon: const Icon(Icons.assignment_ind_outlined,

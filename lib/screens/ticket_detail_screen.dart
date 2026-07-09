@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../constants/api_keys.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/notification_service.dart';
 import '../widgets/ticket_widgets.dart';
 
 class TicketDetailScreen extends StatefulWidget {
@@ -266,6 +267,16 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         'status'        : 'resolved',
       });
 
+      // Notify assigned agent that reply was sent and ticket is resolved
+      final assignedTo = widget.ticket.assignedTo ?? '';
+      if (assignedTo.isNotEmpty && assignedTo != _uid) {
+        await NotificationService.notifyStatusChange(
+          ticketId  : widget.ticket.ticketId,
+          assignedTo: assignedTo,
+          newStatus : 'resolved',
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Reply sent'),
@@ -305,7 +316,20 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
   }
 
   Future<void> _assignToMe() => _update({'assignedTo': _uid, 'status': 'assigned'});
-  Future<void> _transition(String s) => _update({'status': s});
+
+  /// Status transition + notify the assigned agent
+  Future<void> _transition(String newStatus) async {
+    await _update({'status': newStatus});
+    // Notify assigned agent (could be self — service handles empty uid gracefully)
+    final assignedTo = widget.ticket.assignedTo ?? '';
+    if (assignedTo.isNotEmpty) {
+      await NotificationService.notifyStatusChange(
+        ticketId  : widget.ticket.ticketId,
+        assignedTo: assignedTo,
+        newStatus : newStatus,
+      );
+    }
+  }
 
   Future<String> _fetchAgentName(String uid) async {
     try {
