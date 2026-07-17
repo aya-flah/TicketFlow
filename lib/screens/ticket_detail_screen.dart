@@ -198,6 +198,19 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         );
       }
 
+      // Notify customer that their ticket has been replied to
+      final submittedBy = widget.ticket.submittedBy ?? '';
+      if (submittedBy.isNotEmpty) {
+        final shortId =
+            widget.ticket.ticketId.substring(0, 8).toUpperCase();
+        await NotificationService.createNotification(
+          userId  : submittedBy,
+          type    : 'status_change',
+          ticketId: widget.ticket.ticketId,
+          message : 'Support team replied to your ticket #$shortId',
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Reply sent'),

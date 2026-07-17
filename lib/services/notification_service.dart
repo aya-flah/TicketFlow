@@ -69,9 +69,9 @@ class NotificationService {
   static Future<void> notifyAgentsNewTicket({
     required String ticketId,
     required String message,
+    String? submittedBy, // customer uid if submitted via customer portal
   }) async {
     try {
-      // Query both agents and managers
       final agentsSnap = await FirebaseFirestore.instance
           .collection('users')
           .where('role', isEqualTo: 'agent')
@@ -82,7 +82,6 @@ class NotificationService {
           .get();
 
       final allUsers = [...agentsSnap.docs, ...managersSnap.docs];
-
       if (allUsers.isEmpty) {
         debugPrint('NotificationService: no users found to notify');
         return;
@@ -92,6 +91,11 @@ class NotificationService {
           ? '${message.substring(0, 50)}…'
           : message;
 
+      // Clearer wording when submitted by a customer
+      final notifMessage = submittedBy != null
+          ? 'New ticket from customer: $preview'
+          : 'New ticket received: $preview';
+
       final batch = FirebaseFirestore.instance.batch();
       for (final user in allUsers) {
         final ref = _col.doc();
@@ -100,7 +104,7 @@ class NotificationService {
           'userId'   : user.id,
           'type'     : 'new_ticket',
           'ticketId' : ticketId,
-          'message'  : 'New ticket received: $preview',
+          'message'  : notifMessage,
           'read'     : false,
           'createdAt': FieldValue.serverTimestamp(),
         });
@@ -109,7 +113,9 @@ class NotificationService {
       debugPrint(
           'NotificationService: notified ${allUsers.length} users for ticket $ticketId');
     } catch (e) {
+      // Re-throw so callers can surface the error in the UI
       debugPrint('NotificationService.notifyAgentsNewTicket error: $e');
+      rethrow;
     }
   }
 

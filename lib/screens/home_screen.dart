@@ -25,16 +25,24 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _statusFilter = 'all';
-  String _searchQuery = '';
+  String _statusFilter  = 'all';
+  String _urgencyFilter = 'all'; // all | high | medium | low
+  String _searchQuery   = '';
   final _searchCtrl = TextEditingController();
 
-  static const _filters = [
-    ('all', 'All'),
-    ('open', 'Open'),
-    ('assigned', 'Assigned'),
+  static const _statusFilters = [
+    ('all',         'All'),
+    ('open',        'Open'),
+    ('assigned',    'Assigned'),
     ('in_progress', 'In Progress'),
-    ('resolved', 'Resolved'),
+    ('resolved',    'Resolved'),
+  ];
+
+  static const _urgencyFilters = [
+    ('all',    'All'),
+    ('high',   'High'),
+    ('medium', 'Medium'),
+    ('low',    'Low'),
   ];
 
   @override
@@ -52,8 +60,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Ticket> _filter(List<Ticket> all) => all.where((t) {
         final ms = _statusFilter == 'all' || t.status == _statusFilter;
-        final q = _searchQuery.toLowerCase();
-        return ms && (q.isEmpty || t.message.toLowerCase().contains(q));
+        final mu = _urgencyFilter == 'all' || t.urgency == _urgencyFilter;
+        final q  = _searchQuery.toLowerCase();
+        return ms && mu &&
+            (q.isEmpty || t.message.toLowerCase().contains(q));
       }).toList();
 
   // ── Create ticket ────────────────────────────────────────────────────────────
@@ -338,7 +348,8 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Column(
         children: [
           _searchBar(),
-          _filterBar(),
+          _statusFilterBar(),
+          _urgencyFilterBar(),
           Expanded(child: _ticketList()),
         ],
       ),
@@ -519,12 +530,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-  Widget _filterBar() => SizedBox(
+  Widget _statusFilterBar() => SizedBox(
         height: 44,
         child: ListView(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          children: _filters.map((f) {
+          children: _statusFilters.map((f) {
             final active = _statusFilter == f.$1;
             return Padding(
               padding: const EdgeInsets.only(right: 8),
@@ -538,23 +549,65 @@ class _HomeScreenState extends State<HomeScreen> {
                 labelStyle: TextStyle(
                   color: active ? Colors.white : Colors.black54,
                   fontSize: 13,
-                  fontWeight: active
-                      ? FontWeight.w600
-                      : FontWeight.normal,
+                  fontWeight:
+                      active ? FontWeight.w600 : FontWeight.normal,
                 ),
                 side: BorderSide(
-                    color: active
-                        ? AppColors.navy
-                        : AppColors.lightBlue),
+                    color: active ? AppColors.navy : AppColors.lightBlue),
                 checkmarkColor: Colors.white,
                 showCheckmark: false,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
               ),
             );
           }).toList(),
         ),
       );
+
+  Widget _urgencyFilterBar() {
+    // Urgency chip colours
+    Color chipColor(String urgency) {
+      switch (urgency) {
+        case 'high':   return const Color(0xFFF44336);
+        case 'medium': return const Color(0xFFFF9800);
+        case 'low':    return const Color(0xFF4CAF50);
+        default:       return AppColors.navy;
+      }
+    }
+
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+        children: _urgencyFilters.map((f) {
+          final active  = _urgencyFilter == f.$1;
+          final color   = f.$1 == 'all' ? AppColors.navy : chipColor(f.$1);
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilterChip(
+              label: Text(f.$2),
+              selected: active,
+              onSelected: (_) =>
+                  setState(() => _urgencyFilter = f.$1),
+              backgroundColor: Colors.white,
+              selectedColor: color,
+              labelStyle: TextStyle(
+                color: active ? Colors.white : Colors.black54,
+                fontSize: 12,
+                fontWeight:
+                    active ? FontWeight.w600 : FontWeight.normal,
+              ),
+              side: BorderSide(
+                  color: active ? color : AppColors.lightBlue),
+              checkmarkColor: Colors.white,
+              showCheckmark: false,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
 
   Widget _ticketList() => StreamBuilder<List<Ticket>>(
         stream: _stream(),
@@ -583,7 +636,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 16),
                   Text(
                     _searchQuery.isNotEmpty ||
-                            _statusFilter != 'all'
+                            _statusFilter != 'all' ||
+                            _urgencyFilter != 'all'
                         ? 'No tickets match your filter.'
                         : 'No tickets yet.\nTap + to create one.',
                     textAlign: TextAlign.center,

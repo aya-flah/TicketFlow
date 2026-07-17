@@ -6,6 +6,7 @@ import '../constants/app_colors.dart';
 import '../models/notification_model.dart';
 import '../models/ticket.dart';
 import '../services/notification_service.dart';
+import 'customer/customer_ticket_detail_screen.dart';
 import 'ticket_detail_screen.dart';
 
 class NotificationsScreen extends StatelessWidget {
@@ -51,13 +52,17 @@ class NotificationsScreen extends StatelessWidget {
     // Mark as read first
     if (!n.read) await NotificationService.markAsRead(n.notificationId);
 
-    // Fetch the ticket doc
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('tickets')
-          .doc(n.ticketId)
-          .get();
-      if (!doc.exists) {
+      // Fetch ticket and user role in parallel
+      final results = await Future.wait([
+        FirebaseFirestore.instance.collection('tickets').doc(n.ticketId).get(),
+        FirebaseFirestore.instance.collection('users').doc(_uid).get(),
+      ]);
+
+      final ticketDoc = results[0];
+      final userDoc   = results[1];
+
+      if (!ticketDoc.exists) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Ticket not found.'),
@@ -66,8 +71,20 @@ class NotificationsScreen extends StatelessWidget {
         }
         return;
       }
-      final ticket = Ticket.fromFirestore(doc);
-      if (context.mounted) {
+
+      final ticket = Ticket.fromFirestore(ticketDoc);
+      final role   = userDoc.data()?['role'] as String? ?? '';
+
+      if (!context.mounted) return;
+
+      // Customers see their read-only view; agents/managers see the full view
+      if (role == 'customer') {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => CustomerTicketDetailScreen(ticket: ticket)),
+        );
+      } else {
         Navigator.push(
           context,
           MaterialPageRoute(

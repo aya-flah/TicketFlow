@@ -2,8 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
+import '../utils/router.dart' as app_router;
 import '../widgets/blob_background.dart';
-import 'home_screen.dart';
 import 'login_screen.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -37,7 +37,7 @@ class _SignupScreenState extends State<SignupScreen> {
     final formValid = _formKey.currentState!.validate();
 
     if (selectedRole == null) {
-      _showError('Please select a role (Agent or Manager).');
+      _showError('Please select a role (Agent, Manager, or Customer).');
       return;
     }
     if (!_agreeToTerms) {
@@ -69,10 +69,10 @@ class _SignupScreenState extends State<SignupScreen> {
 
       if (!mounted) return;
 
-      // 3. Go to home
+      // 3. Route based on role
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => HomeScreen(
+          builder: (_) => app_router.homeForRole(
             userName: _nameController.text.trim().split(' ').first,
             role: selectedRole!,
           ),
@@ -335,13 +335,17 @@ class _SignupScreenState extends State<SignupScreen> {
 
   // ── Role selector ────────────────────────────────────────────────────────────
   Widget _roleSelector() {
-    return Row(
+    return Column(
       children: [
-        Expanded(child: _roleOption('agent', 'Agent', Icons.support_agent)),
-        const SizedBox(width: 12),
-        Expanded(
-            child: _roleOption(
-                'manager', 'Manager', Icons.manage_accounts_outlined)),
+        Row(
+          children: [
+            Expanded(child: _roleOption('agent', 'Agent', Icons.support_agent)),
+            const SizedBox(width: 12),
+            Expanded(child: _roleOption('manager', 'Manager', Icons.manage_accounts_outlined)),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _roleOption('customer', 'Customer', Icons.person_outline),
       ],
     );
   }

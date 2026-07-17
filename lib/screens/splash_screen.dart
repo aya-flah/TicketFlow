@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../constants/app_colors.dart';
-import 'home_screen.dart';
+import '../utils/router.dart' as app_router;
 import 'welcome_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -87,12 +87,14 @@ class _SplashScreenState extends State<SplashScreen>
       final role = doc.data()?['role'] as String? ?? '';
 
       if (!mounted) return;
-      _goTo(HomeScreen(userName: name.isNotEmpty ? name : user.email ?? '',
-          role: role));
+      _goTo(app_router.homeForRole(
+        userName: name.isNotEmpty ? name : user.email ?? '',
+        role: role,
+      ));
     } catch (_) {
       // Firestore unreachable — still go home with email as fallback
       if (!mounted) return;
-      _goTo(HomeScreen(userName: user.email ?? '', role: ''));
+      _goTo(app_router.homeForRole(userName: user.email ?? '', role: ''));
     }
   }
 

@@ -13,6 +13,7 @@ class Ticket {
   final String? finalReply;
   final String? repliedBy;        // uid of agent who sent the reply
   final bool? draftWasEdited;     // true if agent modified the AI draft
+  final String? submittedBy;      // uid of customer who submitted (null for seeded tickets)
   final bool isEscalated;
   final Timestamp createdAt;
   final Timestamp? repliedAt;
@@ -31,6 +32,7 @@ class Ticket {
     this.finalReply,
     this.repliedBy,
     this.draftWasEdited,
+    this.submittedBy,
     this.isEscalated = false,
     required this.createdAt,
     this.repliedAt,
@@ -52,6 +54,7 @@ class Ticket {
       finalReply          : data['finalReply']           as String?,
       repliedBy           : data['repliedBy']            as String?,
       draftWasEdited      : data['draftWasEdited']       as bool?,
+      submittedBy         : data['submittedBy']          as String?,
       isEscalated         : data['isEscalated']          as bool?      ?? false,
       createdAt           : data['createdAt']            as Timestamp? ?? Timestamp.now(),
       repliedAt           : data['repliedAt']            as Timestamp?,
@@ -72,6 +75,7 @@ class Ticket {
         'finalReply'        : finalReply,
         'repliedBy'         : repliedBy,
         'draftWasEdited'    : draftWasEdited,
+        'submittedBy'       : submittedBy,
         'isEscalated'       : isEscalated,
         'createdAt'         : createdAt,
         'repliedAt'         : repliedAt,
@@ -89,6 +93,7 @@ class Ticket {
     String?    finalReply,
     String?    repliedBy,
     bool?      draftWasEdited,
+    String?    submittedBy,
     bool?      isEscalated,
     Timestamp? repliedAt,
     Timestamp? slaDeadline,
@@ -106,6 +111,7 @@ class Ticket {
         finalReply          : finalReply          ?? this.finalReply,
         repliedBy           : repliedBy           ?? this.repliedBy,
         draftWasEdited      : draftWasEdited      ?? this.draftWasEdited,
+        submittedBy         : submittedBy         ?? this.submittedBy,
         isEscalated         : isEscalated         ?? this.isEscalated,
         createdAt           : createdAt,
         repliedAt           : repliedAt           ?? this.repliedAt,
