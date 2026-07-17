@@ -26,24 +26,9 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _statusFilter  = 'all';
-  String _urgencyFilter = 'all'; // all | high | medium | low
+  String _urgencyFilter = 'all';
   String _searchQuery   = '';
   final _searchCtrl = TextEditingController();
-
-  static const _statusFilters = [
-    ('all',         'All'),
-    ('open',        'Open'),
-    ('assigned',    'Assigned'),
-    ('in_progress', 'In Progress'),
-    ('resolved',    'Resolved'),
-  ];
-
-  static const _urgencyFilters = [
-    ('all',    'All'),
-    ('high',   'High'),
-    ('medium', 'Medium'),
-    ('low',    'Low'),
-  ];
 
   @override
   void dispose() {
@@ -346,9 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          _searchBar(),
-          _statusFilterBar(),
-          _urgencyFilterBar(),
+          _searchAndFilterRow(),
           Expanded(child: _ticketList()),
         ],
       ),
@@ -484,126 +467,331 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       );
 
-  Widget _searchBar() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-        child: TextField(
-          controller: _searchCtrl,
-          onChanged: (v) => setState(() => _searchQuery = v),
-          style: const TextStyle(fontSize: 14, color: Colors.black87),
-          decoration: InputDecoration(
-            hintText: 'Search tickets…',
-            hintStyle:
-                const TextStyle(color: Colors.black38, fontSize: 14),
-            prefixIcon: const Icon(Icons.search,
-                color: AppColors.slateBlue, size: 20),
-            suffixIcon: _searchQuery.isNotEmpty
-                ? IconButton(
-                    icon: const Icon(Icons.clear,
-                        color: Colors.black38, size: 18),
-                    onPressed: () {
-                      _searchCtrl.clear();
-                      setState(() => _searchQuery = '');
-                    },
-                  )
-                : null,
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 12),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide:
-                  const BorderSide(color: AppColors.lightBlue),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide:
-                  const BorderSide(color: AppColors.lightBlue),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide:
-                  const BorderSide(color: AppColors.navy, width: 1.5),
+  // ── Active filter count for badge ───────────────────────────────────────────
+  int get _activeFilterCount =>
+      (_statusFilter != 'all' ? 1 : 0) + (_urgencyFilter != 'all' ? 1 : 0);
+
+  // ── Search + filter row ──────────────────────────────────────────────────────
+  Widget _searchAndFilterRow() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      child: Row(
+        children: [
+          // Search field
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              decoration: InputDecoration(
+                hintText: 'Search tickets…',
+                hintStyle:
+                    const TextStyle(color: Colors.black38, fontSize: 14),
+                prefixIcon: const Icon(Icons.search,
+                    color: AppColors.slateBlue, size: 20),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear,
+                            color: Colors.black38, size: 18),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _searchQuery = '');
+                        },
+                      )
+                    : null,
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide:
+                      const BorderSide(color: AppColors.lightBlue),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide:
+                      const BorderSide(color: AppColors.lightBlue),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                      color: AppColors.navy, width: 1.5),
+                ),
+              ),
             ),
           ),
-        ),
-      );
+          const SizedBox(width: 10),
 
-  Widget _statusFilterBar() => SizedBox(
-        height: 44,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          children: _statusFilters.map((f) {
-            final active = _statusFilter == f.$1;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilterChip(
-                label: Text(f.$2),
-                selected: active,
-                onSelected: (_) =>
-                    setState(() => _statusFilter = f.$1),
-                backgroundColor: Colors.white,
-                selectedColor: AppColors.navy,
-                labelStyle: TextStyle(
-                  color: active ? Colors.white : Colors.black54,
-                  fontSize: 13,
-                  fontWeight:
-                      active ? FontWeight.w600 : FontWeight.normal,
+          // Sort/filter button
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Material(
+                color: _activeFilterCount > 0
+                    ? AppColors.navy
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                elevation: 1,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: _showFilterSheet,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _activeFilterCount > 0
+                            ? AppColors.navy
+                            : AppColors.lightBlue,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.tune_rounded,
+                          size: 18,
+                          color: _activeFilterCount > 0
+                              ? Colors.white
+                              : AppColors.slateBlue,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Filter',
+                          style: TextStyle(
+                            color: _activeFilterCount > 0
+                                ? Colors.white
+                                : Colors.black54,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                side: BorderSide(
-                    color: active ? AppColors.navy : AppColors.lightBlue),
-                checkmarkColor: Colors.white,
-                showCheckmark: false,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
+              ),
+              // Active filter badge
+              if (_activeFilterCount > 0)
+                Positioned(
+                  right: -4,
+                  top: -4,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF44336),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$_activeFilterCount',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Filter bottom sheet ──────────────────────────────────────────────────────
+  void _showFilterSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Widget sectionTitle(String t) => Padding(
+                padding: const EdgeInsets.fromLTRB(0, 16, 0, 10),
+                child: Text(t,
+                    style: const TextStyle(
+                        color: Colors.black45,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1)),
+              );
+
+          Widget optionRow(
+            String label,
+            String value,
+            String current,
+            Color color,
+            VoidCallback onTap,
+          ) {
+            final active = current == value;
+            return GestureDetector(
+              onTap: () {
+                onTap();
+                setS(() {});
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: active
+                      ? color.withValues(alpha: 0.10)
+                      : const Color(0xFFF7F9FC),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: active ? color : Colors.transparent,
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                          color: color, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(label,
+                        style: TextStyle(
+                          color: active ? color : Colors.black87,
+                          fontSize: 13,
+                          fontWeight: active
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                        )),
+                    const Spacer(),
+                    if (active)
+                      Icon(Icons.check_circle_rounded,
+                          color: color, size: 16),
+                  ],
+                ),
               ),
             );
-          }).toList(),
-        ),
-      );
+          }
 
-  Widget _urgencyFilterBar() {
-    // Urgency chip colours
-    Color chipColor(String urgency) {
-      switch (urgency) {
-        case 'high':   return const Color(0xFFF44336);
-        case 'medium': return const Color(0xFFFF9800);
-        case 'low':    return const Color(0xFF4CAF50);
-        default:       return AppColors.navy;
-      }
-    }
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.75,
+            minChildSize: 0.5,
+            maxChildSize: 0.92,
+            builder: (_, scrollCtrl) => Column(
+              children: [
+                // Handle + header — fixed at top
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                  child: Column(
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40, height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.black12,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Filters',
+                              style: TextStyle(
+                                  color: AppColors.darkNavy,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold)),
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _statusFilter  = 'all';
+                                _urgencyFilter = 'all';
+                              });
+                              setS(() {});
+                            },
+                            child: const Text('Clear all',
+                                style: TextStyle(
+                                    color: AppColors.slateBlue,
+                                    fontSize: 13)),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 16),
+                    ],
+                  ),
+                ),
 
-    return SizedBox(
-      height: 40,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-        children: _urgencyFilters.map((f) {
-          final active  = _urgencyFilter == f.$1;
-          final color   = f.$1 == 'all' ? AppColors.navy : chipColor(f.$1);
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilterChip(
-              label: Text(f.$2),
-              selected: active,
-              onSelected: (_) =>
-                  setState(() => _urgencyFilter = f.$1),
-              backgroundColor: Colors.white,
-              selectedColor: color,
-              labelStyle: TextStyle(
-                color: active ? Colors.white : Colors.black54,
-                fontSize: 12,
-                fontWeight:
-                    active ? FontWeight.w600 : FontWeight.normal,
-              ),
-              side: BorderSide(
-                  color: active ? color : AppColors.lightBlue),
-              checkmarkColor: Colors.white,
-              showCheckmark: false,
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+                // Scrollable options
+                Expanded(
+                  child: ListView(
+                    controller: scrollCtrl,
+                    padding:
+                        const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                    children: [
+                      sectionTitle('STATUS'),
+                      ...const [
+                        ('all',         'All statuses', AppColors.slateBlue),
+                        ('open',        'Open',         Color(0xFF2196F3)),
+                        ('assigned',    'Assigned',     Color(0xFFFF9800)),
+                        ('in_progress', 'In Progress',  Color(0xFFFFC107)),
+                        ('resolved',    'Resolved',     Color(0xFF4CAF50)),
+                        ('reopened',    'Reopened',     Color(0xFFF44336)),
+                      ].map((s) => optionRow(
+                            s.$2, s.$1, _statusFilter, s.$3,
+                            () => setState(() => _statusFilter = s.$1),
+                          )),
+
+                      sectionTitle('URGENCY'),
+                      ...const [
+                        ('all',    'All urgencies', AppColors.slateBlue),
+                        ('high',   'High',          Color(0xFFF44336)),
+                        ('medium', 'Medium',        Color(0xFFFF9800)),
+                        ('low',    'Low',           Color(0xFF4CAF50)),
+                      ].map((u) => optionRow(
+                            u.$2, u.$1, _urgencyFilter, u.$3,
+                            () => setState(
+                                () => _urgencyFilter = u.$1),
+                          )),
+                    ],
+                  ),
+                ),
+
+                // Apply button — fixed at bottom
+                Padding(
+                  padding:
+                      const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.navy,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.circular(14)),
+                      ),
+                      child: const Text('Apply',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
+              ],
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }

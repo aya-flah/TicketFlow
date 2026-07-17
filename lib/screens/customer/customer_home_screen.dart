@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import '../../constants/app_colors.dart';
 import '../../models/ticket.dart';
 import '../../services/notification_service.dart';
-import '../../widgets/ticket_widgets.dart';
 import '../notifications_screen.dart';
 import '../welcome_screen.dart';
 import 'customer_ticket_detail_screen.dart';
@@ -427,7 +426,6 @@ class _MyTicketsTab extends StatelessWidget {
           itemCount: list.length,
           itemBuilder: (_, i) {
             final t = list[i];
-            final sc = statusColor(t.status);
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               elevation: 2,
@@ -479,17 +477,69 @@ class _MyTicketsTab extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
 
-                      // Status badge + reply indicator
+                      // Simple reply status for customer
                       Row(
                         children: [
-                          TicketBadge(
-                              label: formatStatus(t.status), color: sc),
-                          if (t.finalReply != null) ...[
-                            const SizedBox(width: 8),
-                            const TicketBadge(
-                                label: '✓ Replied',
-                                color: Color(0xFF4CAF50)),
-                          ],
+                          if (t.finalReply != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF4CAF50)
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color: const Color(0xFF4CAF50)
+                                        .withValues(alpha: 0.40)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.check_circle_outline,
+                                      size: 13,
+                                      color: Color(0xFF4CAF50)),
+                                  SizedBox(width: 5),
+                                  Text('Resolved',
+                                      style: TextStyle(
+                                          color: Color(0xFF4CAF50),
+                                          fontSize: 12,
+                                          fontWeight:
+                                              FontWeight.w600)),
+                                ],
+                              ),
+                            )
+                          else
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: AppColors.slateBlue
+                                    .withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color: AppColors.slateBlue
+                                        .withValues(alpha: 0.30)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 10,
+                                    height: 10,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 1.5,
+                                        color: AppColors.slateBlue),
+                                  ),
+                                  SizedBox(width: 7),
+                                  Text('Awaiting reply',
+                                      style: TextStyle(
+                                          color: AppColors.slateBlue,
+                                          fontSize: 12,
+                                          fontWeight:
+                                              FontWeight.w600)),
+                                ],
+                              ),
+                            ),
                         ],
                       ),
                     ],
