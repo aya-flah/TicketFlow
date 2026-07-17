@@ -1,13 +1,10 @@
-import 'dart:convert';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
-import '../constants/api_keys.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/gemini_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/ticket_widgets.dart';
 
@@ -75,66 +72,18 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
     if (!mounted) return;
     setState(() => _classifying = true);
 
-    const allowedCategories = ['billing', 'bug', 'question', 'complaint'];
-    const allowedUrgencies  = ['low', 'medium', 'high'];
-    const allowedSentiments = ['angry', 'neutral', 'happy'];
-    const maxRetries        = 3;
-    Exception? lastError;
-
+    const maxRetries = 3;
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        final uri = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/'
-          'gemini-2.5-flash-lite:generateContent?key=${ApiKeys.gemini}',
+        final result = await GeminiService.classify(
+          ticketId: widget.ticket.ticketId,
+          message: message,
         );
-        final prompt =
-            'You are a support ticket classifier. Classify the following '
-            'customer support message. Respond ONLY with a valid JSON object, '
-            'no markdown, no explanation, exactly in this format: '
-            '{"category": "billing" or "bug" or "question" or "complaint", '
-            '"urgency": "low" or "medium" or "high", '
-            '"sentiment": "angry" or "neutral" or "happy"}. '
-            'Message: $message';
-
-        final resp = await http.post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [{'parts': [{'text': prompt}]}],
-            'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 120},
-          }),
-        ).timeout(const Duration(seconds: 20));
-
-        if (resp.statusCode == 503 || resp.statusCode == 429) {
-          lastError = Exception('Gemini HTTP ${resp.statusCode}');
-          if (attempt < maxRetries) { await Future.delayed(Duration(seconds: 2 * attempt)); continue; }
-          throw lastError;
-        }
-        if (resp.statusCode != 200) throw Exception('Gemini HTTP ${resp.statusCode}: ${resp.body}');
-
-        final decoded  = jsonDecode(resp.body) as Map<String, dynamic>;
-        String rawText = (decoded['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?) ?? '';
-        if (rawText.trim().isEmpty) throw Exception('Empty response');
-
-        rawText = rawText.trim();
-        final fence = RegExp(r'```(?:json)?\s*([\s\S]*?)```').firstMatch(rawText);
-        if (fence != null) rawText = fence.group(1)!.trim();
-
-        final parsed    = jsonDecode(rawText) as Map<String, dynamic>;
-        final category  = parsed['category']  as String?;
-        final urgency   = parsed['urgency']   as String?;
-        final sentiment = parsed['sentiment'] as String?;
-
-        if (!allowedCategories.contains(category) ||
-            !allowedUrgencies.contains(urgency)   ||
-            !allowedSentiments.contains(sentiment)) {
-          throw Exception('Invalid classification values: $parsed');
-        }
 
         await _ref.update({
-          'category'              : category,
-          'urgency'               : urgency,
-          'sentiment'             : sentiment,
+          'category'              : result['category'],
+          'urgency'               : result['urgency'],
+          'sentiment'             : result['sentiment'],
           'aiClassifiedAt'        : FieldValue.serverTimestamp(),
           'aiClassificationFailed': false,
         });
@@ -143,13 +92,14 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         return;
 
       } catch (e) {
-        lastError = e is Exception ? e : Exception(e.toString());
-        debugPrint('Classify attempt $attempt failed: $e');
-        if (attempt < maxRetries) await Future.delayed(Duration(seconds: 2 * attempt));
+        debugPrint('Classify attempt $attempt/$maxRetries failed: $e');
+        if (attempt < maxRetries) {
+          await Future.delayed(Duration(seconds: 5 * attempt));
+        }
       }
     }
 
-    // Fallback
+    // All retries failed — write fallback
     try {
       await _ref.update({
         'category'              : 'unclassified',
@@ -176,49 +126,19 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
     setState(() => _generatingDraft = true);
 
     const maxRetries = 3;
-    Exception? lastError;
-
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        final uri = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/'
-          'gemini-2.5-flash-lite:generateContent?key=${ApiKeys.gemini}',
+        final draftText = await GeminiService.generateDraft(
+          ticketId : t.ticketId,
+          message  : t.message,
+          category : t.category ?? 'general',
+          urgency  : t.urgency  ?? 'medium',
+          sentiment: t.sentiment ?? 'neutral',
         );
 
-        final prompt =
-            'You are a professional customer support agent. Write a helpful, '
-            'empathetic reply to the following customer support message. '
-            'The message has been classified as category: ${t.category}, '
-            'urgency: ${t.urgency}, sentiment: ${t.sentiment}. '
-            'Keep the reply concise (2-4 sentences), professional, and '
-            'directly address the customer\'s concern. Do not use placeholders '
-            'like [Name] or [Agent]. Sign off as \'The Support Team\'. '
-            'Respond with ONLY the reply text, no explanation, no subject line, '
-            'no formatting.';
-
-        final resp = await http.post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [{'parts': [{'text': prompt}]}],
-            'generationConfig': {'temperature': 0.7, 'maxOutputTokens': 300},
-          }),
-        ).timeout(const Duration(seconds: 25));
-
-        if (resp.statusCode == 503 || resp.statusCode == 429) {
-          lastError = Exception('Gemini HTTP ${resp.statusCode}');
-          if (attempt < maxRetries) { await Future.delayed(Duration(seconds: 2 * attempt)); continue; }
-          throw lastError;
-        }
-        if (resp.statusCode != 200) throw Exception('Gemini HTTP ${resp.statusCode}: ${resp.body}');
-
-        final decoded  = jsonDecode(resp.body) as Map<String, dynamic>;
-        final draftText = ((decoded['candidates']?[0]?['content']?['parts']?[0]?['text']) as String?)?.trim() ?? '';
-        if (draftText.isEmpty) throw Exception('Empty draft response');
-
         await _ref.update({
-          'aiDraftReply'       : draftText,
-          'aiDraftGeneratedAt' : FieldValue.serverTimestamp(),
+          'aiDraftReply'      : draftText,
+          'aiDraftGeneratedAt': FieldValue.serverTimestamp(),
         });
 
         if (mounted) {
@@ -229,9 +149,10 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         return;
 
       } catch (e) {
-        lastError = e is Exception ? e : Exception(e.toString());
-        debugPrint('Draft generation attempt $attempt failed: $e');
-        if (attempt < maxRetries) await Future.delayed(Duration(seconds: 2 * attempt));
+        debugPrint('Draft generation attempt $attempt/$maxRetries failed: $e');
+        if (attempt < maxRetries) {
+          await Future.delayed(Duration(seconds: 5 * attempt));
+        }
       }
     }
 
@@ -274,6 +195,19 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
           ticketId  : widget.ticket.ticketId,
           assignedTo: assignedTo,
           newStatus : 'resolved',
+        );
+      }
+
+      // Notify customer that their ticket has been replied to
+      final submittedBy = widget.ticket.submittedBy ?? '';
+      if (submittedBy.isNotEmpty) {
+        final shortId =
+            widget.ticket.ticketId.substring(0, 8).toUpperCase();
+        await NotificationService.createNotification(
+          userId  : submittedBy,
+          type    : 'status_change',
+          ticketId: widget.ticket.ticketId,
+          message : 'Support team replied to your ticket #$shortId',
         );
       }
 
@@ -382,7 +316,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
             WidgetsBinding.instance.addPostFrameCallback((_) => _classify(ticket.message));
           }
 
-          // Once classification lands, trigger draft if needed
+          // Once classification lands (any value, including 'unclassified'),
+          // trigger draft generation if not yet done
           if (ticket.category != null &&
               ticket.aiDraftReply == null &&
               ticket.finalReply == null &&
@@ -755,3 +690,8 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
     );
   }
 }
+
+
+
+
+

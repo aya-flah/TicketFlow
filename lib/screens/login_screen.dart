@@ -2,8 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
+import '../utils/router.dart' as app_router;
 import '../widgets/blob_background.dart';
-import 'home_screen.dart';
 import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -55,7 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => HomeScreen(
+          builder: (_) => app_router.homeForRole(
             userName: name.isNotEmpty
                 ? name.split(' ').first
                 : _emailController.text.split('@').first,
