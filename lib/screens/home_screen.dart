@@ -331,10 +331,6 @@ class _HomeScreenState extends State<HomeScreen> {
               const BorderSide(color: AppColors.navy, width: 1.5),
         ),
       );
-
-
-
-
   // ── Build ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {

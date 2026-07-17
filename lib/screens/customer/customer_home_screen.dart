@@ -15,8 +15,10 @@ class CustomerHomeScreen extends StatefulWidget {
 
   @override
   State<CustomerHomeScreen> createState() => _CustomerHomeScreenState();
-}
+} 
+     
 
+     
 class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
