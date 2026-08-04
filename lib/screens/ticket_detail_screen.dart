@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/escalation_service.dart';
 import '../services/gemini_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/ticket_widgets.dart';
@@ -87,6 +88,12 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
           'aiClassifiedAt'        : FieldValue.serverTimestamp(),
           'aiClassificationFailed': false,
         });
+
+        // Set SLA deadline based on classified urgency (fire-and-forget)
+        EscalationService.setSlaDeadline(
+          widget.ticket.ticketId,
+          result['urgency'] ?? 'medium',
+        );
 
         if (mounted) setState(() => _classifying = false);
         return;

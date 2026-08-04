@@ -3,7 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/escalation_service.dart';
 import '../services/notification_service.dart';
+import 'escalations_screen.dart';
+import 'settings_screen.dart';
 import '../widgets/ticket_widgets.dart';
 import 'my_tickets_screen.dart';
 import 'notifications_screen.dart';
@@ -29,6 +32,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String _urgencyFilter = 'all';
   String _searchQuery   = '';
   final _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Fire-and-forget — runs in background, never blocks UI
+    EscalationService.checkAndEscalateOverdueTickets();
+  }
 
   @override
   void dispose() {
@@ -265,6 +275,45 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      try {
+                        await EscalationService.checkAndEscalateOverdueTickets();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('✓ Escalation check ran'),
+                              backgroundColor: Color(0xFFFF9800),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Escalation error: $e'),
+                              backgroundColor: Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.warning_amber_outlined, size: 18),
+                    label: const Text('Run escalation check now'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFF44336),
+                      side: const BorderSide(color: Color(0xFFF44336)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -448,6 +497,64 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+          // Escalations + Settings (manager only)
+          if (widget.role == 'manager') ...[
+            StreamBuilder<int>(
+              stream:
+                  EscalationService.getActiveEscalationCountStream(),
+              builder: (context, snap) {
+                final count = snap.data ?? 0;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.warning_amber_outlined,
+                          color: Colors.white, size: 22),
+                      tooltip: 'Escalations',
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const EscalationsScreen()),
+                      ),
+                    ),
+                    if (count > 0)
+                      Positioned(
+                        right: 6,
+                        top: 6,
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFF44336),
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                              minWidth: 16, minHeight: 16),
+                          child: Text(
+                            count > 99 ? '99+' : '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings_outlined,
+                  color: Colors.white, size: 22),
+              tooltip: 'SLA Settings',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SettingsScreen()),
+              ),
+            ),
+          ],
           IconButton(
             icon: const Icon(Icons.logout,
                 color: Colors.white70, size: 20),
