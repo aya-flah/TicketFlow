@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../../constants/app_colors.dart';
 import '../../models/ticket.dart';
+import '../../services/agent_cache.dart';
 import '../../widgets/ticket_widgets.dart';
 
 class CustomerTicketDetailScreen extends StatelessWidget {
@@ -33,12 +34,15 @@ class CustomerTicketDetailScreen extends StatelessWidget {
         backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text(
-          '#${ticket.ticketId.substring(0, 8).toUpperCase()}',
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600),
+        title: FutureBuilder<String>(
+          future: AgentCache.instance.getName(ticket.submittedBy ?? ''),
+          builder: (_, snap) => Text(
+            snap.data ?? '…',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600),
+          ),
         ),
       ),
       body: StreamBuilder<DocumentSnapshot>(

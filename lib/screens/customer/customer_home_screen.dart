@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../constants/app_colors.dart';
 import '../../models/ticket.dart';
+import '../../services/agent_cache.dart';
 import '../../services/notification_service.dart';
 import '../notifications_screen.dart';
 import '../welcome_screen.dart';
@@ -446,16 +447,19 @@ class _MyTicketsTab extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // ID + date
+                      // Customer name + date
                       Row(
                         children: [
-                          Text(
-                            '#${t.ticketId.substring(0, 8).toUpperCase()}',
-                            style: const TextStyle(
-                                color: AppColors.slateBlue,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.5),
+                          FutureBuilder<String>(
+                            future: AgentCache.instance
+                                .getName(t.submittedBy ?? ''),
+                            builder: (_, snap) => Text(
+                              snap.data ?? '…',
+                              style: const TextStyle(
+                                  color: AppColors.slateBlue,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600),
+                            ),
                           ),
                           const Spacer(),
                           Text(_fmt(t.createdAt),

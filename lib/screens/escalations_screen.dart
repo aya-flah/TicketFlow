@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
 import '../services/escalation_service.dart';
 import '../widgets/ticket_widgets.dart';
 import 'ticket_detail_screen.dart';
@@ -133,16 +134,19 @@ class EscalationsScreen extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // ID + escalated time
+                              // Submitter name + escalated time
                               Row(
                                 children: [
-                                  Text(
-                                    '#${ticketId.substring(0, 8).toUpperCase()}',
-                                    style: const TextStyle(
-                                      color: AppColors.slateBlue,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: 0.5,
+                                  FutureBuilder<String>(
+                                    future: AgentCache.instance.getName(
+                                        (data['submittedBy'] as String?) ?? ''),
+                                    builder: (_, snap) => Text(
+                                      snap.data ?? '…',
+                                      style: const TextStyle(
+                                        color: AppColors.slateBlue,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
                                   const Spacer(),

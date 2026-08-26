@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
 import '../services/escalation_service.dart';
 import '../services/gemini_service.dart';
 import '../services/notification_service.dart';
@@ -489,9 +490,16 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text(
-          '#${widget.ticket.ticketId.substring(0, 8).toUpperCase()}',
-          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+        title: FutureBuilder<String>(
+          future: AgentCache.instance
+              .getName(widget.ticket.submittedBy ?? ''),
+          builder: (_, snap) => Text(
+            snap.data ?? '…',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600),
+          ),
         ),
       ),
       body: StreamBuilder<DocumentSnapshot>(

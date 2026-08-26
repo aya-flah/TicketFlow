@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
 import '../widgets/ticket_widgets.dart';
 import 'ticket_detail_screen.dart';
 
@@ -267,13 +268,15 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
             children: [
               Row(
                 children: [
-                  Text(
-                    '#${t.ticketId.substring(0, 8).toUpperCase()}',
-                    style: const TextStyle(
-                      color: AppColors.slateBlue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
+                  FutureBuilder<String>(
+                    future: AgentCache.instance.getName(t.submittedBy ?? ''),
+                    builder: (_, snap) => Text(
+                      snap.data ?? '…',
+                      style: const TextStyle(
+                        color: AppColors.slateBlue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const Spacer(),

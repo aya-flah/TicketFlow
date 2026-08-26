@@ -393,15 +393,31 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 0,
         automaticallyImplyLeading: false,
         titleSpacing: 0,
+        // Back arrow for manager (returns to dashboard)
+        leading: widget.role == 'manager'
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.white, size: 20),
+                tooltip: 'Back to Dashboard',
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         title: Padding(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16),
+          padding: EdgeInsets.only(
+              left: widget.role == 'manager' ? 0 : 16, right: 16),
           child: Row(
             children: [
-              Image.asset('lib/image/logowt.png',
-                  height: 28, color: Colors.white),
+              if (widget.role != 'manager')
+                Image.asset('lib/image/logowt.png',
+                    height: 28, color: Colors.white),
+              if (widget.role == 'manager')
+                const Text('All Tickets',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600)),
               const Spacer(),
-              if (widget.role.isNotEmpty)
+              if (widget.role.isNotEmpty && widget.role != 'manager')
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 10, vertical: 4),
@@ -437,7 +453,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
-          // ── Notification bell with live unread badge ────────────────────
+          // ── Notification bell ──────────────────────────────────────────
           StreamBuilder<int>(
             stream: NotificationService.getUnreadCountStream(
                 FirebaseAuth.instance.currentUser?.uid ?? ''),
@@ -483,21 +499,22 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-          // My Tickets shortcut
-          IconButton(
-            icon: const Icon(Icons.assignment_ind_outlined,
-                color: Colors.white, size: 22),
-            tooltip: 'My Tickets',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => MyTicketsScreen(
-                  userName: widget.userName,
-                  role: widget.role,
+          // My Tickets — agents only (managers use dashboard)
+          if (widget.role != 'manager')
+            IconButton(
+              icon: const Icon(Icons.assignment_ind_outlined,
+                  color: Colors.white, size: 22),
+              tooltip: 'My Tickets',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => MyTicketsScreen(
+                    userName: widget.userName,
+                    role: widget.role,
+                  ),
                 ),
               ),
             ),
-          ),
           // Escalations + Settings (manager only)
           if (widget.role == 'manager') ...[
             StreamBuilder<int>(
@@ -991,13 +1008,17 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  Text(
-                    '#${t.ticketId.substring(0, 8).toUpperCase()}',
-                    style: const TextStyle(
-                      color: AppColors.slateBlue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
+                  // Submitter name instead of ticket ID
+                  FutureBuilder<String>(
+                    future: AgentCache.instance
+                        .getName(t.submittedBy ?? ''),
+                    builder: (_, snap) => Text(
+                      snap.data ?? '…',
+                      style: const TextStyle(
+                        color: AppColors.slateBlue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const Spacer(),

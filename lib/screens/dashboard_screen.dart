@@ -29,20 +29,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     EscalationService.checkAndEscalateOverdueTickets();
   }
 
-  // ── Data helpers ─────────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> _fetchStats() async {
-    final all = await _db.collection('tickets').get();
-    final docs = all.docs;
-
+  // ── Convert Firestore snapshot to stats map ──────────────────────────────
+  Map<String, dynamic> _computeStats(List<QueryDocumentSnapshot> docs) {
     int open = 0, resolved = 0, escalated = 0;
     int low = 0, medium = 0, high = 0, noUrgency = 0;
     double totalResponseHours = 0;
     int responseSamples = 0;
 
-    final now = DateTime.now();
+    final now     = DateTime.now();
     final weekAgo = now.subtract(const Duration(days: 7));
-    final Map<String, int> dailyVolume = {};   // "dd/MM" → count
-    final Map<String, int> categoryCount = {}; // category → count
+    final Map<String, int> dailyVolume   = {};
+    final Map<String, int> categoryCount = {};
 
     for (var d = 0; d < 7; d++) {
       final day = now.subtract(Duration(days: d));
@@ -50,22 +47,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     for (final doc in docs) {
-      final data   = doc.data();
-      final status = data['status'] as String? ?? '';
-      final urg    = data['urgency'] as String?;
-      final isEsc  = data['isEscalated'] as bool? ?? false;
-      final cat    = data['category'] as String?;
-      final createdAt = data['createdAt'] as Timestamp?;
-      final repliedAt = data['repliedAt'] as Timestamp?;
+      final data      = doc.data() as Map<String, dynamic>;
+      final status    = data['status']      as String?    ?? '';
+      final urg       = data['urgency']     as String?;
+      final isEsc     = data['isEscalated'] as bool?      ?? false;
+      final cat       = data['category']    as String?;
+      final createdAt = data['createdAt']   as Timestamp?;
+      final repliedAt = data['repliedAt']   as Timestamp?;
 
       if (status != 'resolved') open++;
       if (status == 'resolved') resolved++;
       if (isEsc) escalated++;
 
       switch (urg) {
-        case 'high':   high++;   break;
-        case 'medium': medium++; break;
-        case 'low':    low++;    break;
+        case 'high':   high++;      break;
+        case 'medium': medium++;    break;
+        case 'low':    low++;       break;
         default:       noUrgency++; break;
       }
 
@@ -100,7 +97,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ? (totalResponseHours / responseSamples).toStringAsFixed(1)
         : 'N/A';
 
-    // Build ordered daily list (oldest → newest)
     final orderedDays = List.generate(7, (i) {
       final day = now.subtract(Duration(days: 6 - i));
       final key = '${day.day}/${day.month}';
@@ -108,20 +104,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     return {
-      'total'     : docs.length,
-      'open'      : open,
-      'resolved'  : resolved,
-      'escalated' : escalated,
-      'high'      : high,
-      'medium'    : medium,
-      'low'       : low,
-      'noUrgency' : noUrgency,
-      'dailyVolume': orderedDays,
-      'topCategory': topCategory,
-      'avgResponse': avgResponse,
+      'total'        : docs.length,
+      'open'         : open,
+      'resolved'     : resolved,
+      'escalated'    : escalated,
+      'high'         : high,
+      'medium'       : medium,
+      'low'          : low,
+      'noUrgency'    : noUrgency,
+      'dailyVolume'  : orderedDays,
+      'topCategory'  : topCategory,
+      'avgResponse'  : avgResponse,
       'categoryCount': categoryCount,
     };
   }
+
+  // ── Live stream of all tickets ────────────────────────────────────────────
+  Stream<Map<String, dynamic>> get _statsStream => _db
+      .collection('tickets')
+      .orderBy('createdAt', descending: true)
+      .snapshots()
+      .map((snap) => _computeStats(snap.docs));
 
   // ── Build ─────────────────────────────────────────────────────────────────
   @override
@@ -129,10 +132,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7FB),
       appBar: _appBar(context),
-      body: FutureBuilder<Map<String, dynamic>>(
-        future: _fetchStats(),
+      body: StreamBuilder<Map<String, dynamic>>(
+        stream: _statsStream,
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
+          if (snap.connectionState == ConnectionState.waiting &&
+              !snap.hasData) {
             return const Center(
                 child: CircularProgressIndicator(color: AppColors.navy));
           }
@@ -142,10 +146,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     style: const TextStyle(color: Colors.redAccent)));
           }
           final s = snap.data!;
-          return RefreshIndicator(
-            color: AppColors.navy,
-            onRefresh: () async => setState(() {}),
-            child: ListView(
+          return ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
                 // Greeting
@@ -246,35 +247,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // View All Tickets button
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: OutlinedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => HomeScreen(
-                          userName: widget.userName,
-                          role: 'manager',
-                        ),
-                      ),
-                    ),
-                    icon: const Icon(Icons.list_alt_outlined, size: 20),
-                    label: const Text('View All Tickets',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.navy,
-                      side: const BorderSide(color: AppColors.navy, width: 1.5),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                ),
+             
               ],
-            ),
-          );
+            );
+          
         },
       ),
     );
@@ -316,6 +292,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         actions: [
+          // Tickets list shortcut (manager)
+          IconButton(
+            icon: const Icon(Icons.list_alt_outlined,
+                color: Colors.white, size: 22),
+            tooltip: 'All Tickets',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => HomeScreen(
+                  userName: widget.userName,
+                  role: 'manager',
+                ),
+              ),
+            ),
+          ),
           // Notifications
           StreamBuilder<int>(
             stream: NotificationService.getUnreadCountStream(
