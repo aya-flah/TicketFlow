@@ -105,7 +105,8 @@ class EscalationsScreen extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => TicketDetailScreen(
-                            ticket: Ticket.fromFirestore(doc)),
+                            ticket: Ticket.fromFirestore(doc),
+                            isManager: true),
                       ),
                     );
                   },

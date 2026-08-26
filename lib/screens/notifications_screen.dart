@@ -88,7 +88,10 @@ class NotificationsScreen extends StatelessWidget {
         Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => TicketDetailScreen(ticket: ticket)),
+              builder: (_) => TicketDetailScreen(
+                    ticket: ticket,
+                    isManager: role == 'manager',
+                  )),
         );
       }
     } catch (e) {

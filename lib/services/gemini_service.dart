@@ -89,6 +89,13 @@ class GeminiService {
     };
   }
 
+  // ── Weekly digest ───────────────────────────────────────────────────────────
+  static Future<String> generateWeeklyDigest({
+    required String prompt,
+  }) async {
+    return _call(prompt: prompt, temperature: 0.6, maxTokens: 400);
+  }
+
   // ── Draft reply ─────────────────────────────────────────────────────────────
   static Future<String> generateDraft({
     required String ticketId,

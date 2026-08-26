@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
 import '../services/escalation_service.dart';
 import '../services/notification_service.dart';
 import 'escalations_screen.dart';
@@ -953,6 +954,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
   Widget _card(Ticket t) {
+    final isManager = widget.role == 'manager';
     final sc = statusColor(t.status);
     final uc = urgencyColor(t.urgency);
     final urgencyLabel = t.urgency != null
@@ -976,7 +978,11 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => TicketDetailScreen(ticket: t)),
+            builder: (_) => TicketDetailScreen(
+              ticket: t,
+              isManager: isManager,
+            ),
+          ),
         ),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1010,7 +1016,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontSize: 14,
                     height: 1.4),
               ),
-              const SizedBox(height: 12),
+              // Manager-only: show assigned agent or unassigned warning
+              if (isManager) ...[
+                const SizedBox(height: 6),
+                if (t.assignedTo != null)
+                  FutureBuilder<String>(
+                    future: AgentCache.instance.getName(t.assignedTo!),
+                    builder: (_, snap) => Text(
+                      'Assigned to: ${snap.data ?? '…'}',
+                      style: const TextStyle(
+                          color: AppColors.slateBlue,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  )
+                else
+                  const Text(
+                    '⚠ Unassigned',
+                    style: TextStyle(
+                        color: Color(0xFFFF9800),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                  ),
+              ],
+              const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
                 children: [
