@@ -3,7 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
+import '../services/escalation_service.dart';
 import '../services/notification_service.dart';
+import 'escalations_screen.dart';
+import 'settings_screen.dart';
 import '../widgets/ticket_widgets.dart';
 import 'my_tickets_screen.dart';
 import 'notifications_screen.dart';
@@ -29,6 +33,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String _urgencyFilter = 'all';
   String _searchQuery   = '';
   final _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Fire-and-forget — runs in background, never blocks UI
+    EscalationService.checkAndEscalateOverdueTickets();
+  }
 
   @override
   void dispose() {
@@ -265,6 +276,45 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      try {
+                        await EscalationService.checkAndEscalateOverdueTickets();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('✓ Escalation check ran'),
+                              backgroundColor: Color(0xFFFF9800),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Escalation error: $e'),
+                              backgroundColor: Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.warning_amber_outlined, size: 18),
+                    label: const Text('Run escalation check now'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFF44336),
+                      side: const BorderSide(color: Color(0xFFF44336)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -343,15 +393,31 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 0,
         automaticallyImplyLeading: false,
         titleSpacing: 0,
+        // Back arrow for manager (returns to dashboard)
+        leading: widget.role == 'manager'
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.white, size: 20),
+                tooltip: 'Back to Dashboard',
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         title: Padding(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16),
+          padding: EdgeInsets.only(
+              left: widget.role == 'manager' ? 0 : 16, right: 16),
           child: Row(
             children: [
-              Image.asset('lib/image/logowt.png',
-                  height: 28, color: Colors.white),
+              if (widget.role != 'manager')
+                Image.asset('lib/image/logowt.png',
+                    height: 28, color: Colors.white),
+              if (widget.role == 'manager')
+                const Text('All Tickets',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600)),
               const Spacer(),
-              if (widget.role.isNotEmpty)
+              if (widget.role.isNotEmpty && widget.role != 'manager')
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 10, vertical: 4),
@@ -387,7 +453,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
-          // ── Notification bell with live unread badge ────────────────────
+          // ── Notification bell ──────────────────────────────────────────
           StreamBuilder<int>(
             stream: NotificationService.getUnreadCountStream(
                 FirebaseAuth.instance.currentUser?.uid ?? ''),
@@ -433,21 +499,80 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-          // My Tickets shortcut
-          IconButton(
-            icon: const Icon(Icons.assignment_ind_outlined,
-                color: Colors.white, size: 22),
-            tooltip: 'My Tickets',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => MyTicketsScreen(
-                  userName: widget.userName,
-                  role: widget.role,
+          // My Tickets — agents only (managers use dashboard)
+          if (widget.role != 'manager')
+            IconButton(
+              icon: const Icon(Icons.assignment_ind_outlined,
+                  color: Colors.white, size: 22),
+              tooltip: 'My Tickets',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => MyTicketsScreen(
+                    userName: widget.userName,
+                    role: widget.role,
+                  ),
                 ),
               ),
             ),
-          ),
+          // Escalations + Settings (manager only)
+          if (widget.role == 'manager') ...[
+            StreamBuilder<int>(
+              stream:
+                  EscalationService.getActiveEscalationCountStream(),
+              builder: (context, snap) {
+                final count = snap.data ?? 0;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.warning_amber_outlined,
+                          color: Colors.white, size: 22),
+                      tooltip: 'Escalations',
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const EscalationsScreen()),
+                      ),
+                    ),
+                    if (count > 0)
+                      Positioned(
+                        right: 6,
+                        top: 6,
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFF44336),
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                              minWidth: 16, minHeight: 16),
+                          child: Text(
+                            count > 99 ? '99+' : '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings_outlined,
+                  color: Colors.white, size: 22),
+              tooltip: 'SLA Settings',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SettingsScreen()),
+              ),
+            ),
+          ],
           IconButton(
             icon: const Icon(Icons.logout,
                 color: Colors.white70, size: 20),
@@ -846,6 +971,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
   Widget _card(Ticket t) {
+    final isManager = widget.role == 'manager';
     final sc = statusColor(t.status);
     final uc = urgencyColor(t.urgency);
     final urgencyLabel = t.urgency != null
@@ -869,7 +995,11 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => TicketDetailScreen(ticket: t)),
+            builder: (_) => TicketDetailScreen(
+              ticket: t,
+              isManager: isManager,
+            ),
+          ),
         ),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -878,13 +1008,17 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  Text(
-                    '#${t.ticketId.substring(0, 8).toUpperCase()}',
-                    style: const TextStyle(
-                      color: AppColors.slateBlue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
+                  // Submitter name instead of ticket ID
+                  FutureBuilder<String>(
+                    future: AgentCache.instance
+                        .getName(t.submittedBy ?? ''),
+                    builder: (_, snap) => Text(
+                      snap.data ?? '…',
+                      style: const TextStyle(
+                        color: AppColors.slateBlue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const Spacer(),
@@ -903,7 +1037,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontSize: 14,
                     height: 1.4),
               ),
-              const SizedBox(height: 12),
+              // Manager-only: show assigned agent or unassigned warning
+              if (isManager) ...[
+                const SizedBox(height: 6),
+                if (t.assignedTo != null)
+                  FutureBuilder<String>(
+                    future: AgentCache.instance.getName(t.assignedTo!),
+                    builder: (_, snap) => Text(
+                      'Assigned to: ${snap.data ?? '…'}',
+                      style: const TextStyle(
+                          color: AppColors.slateBlue,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  )
+                else
+                  const Text(
+                    '⚠ Unassigned',
+                    style: TextStyle(
+                        color: Color(0xFFFF9800),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                  ),
+              ],
+              const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
                 children: [

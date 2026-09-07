@@ -4,13 +4,21 @@ import 'package:flutter/material.dart';
 
 import '../constants/app_colors.dart';
 import '../models/ticket.dart';
+import '../services/agent_cache.dart';
+import '../services/escalation_service.dart';
 import '../services/gemini_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/ticket_widgets.dart';
 
 class TicketDetailScreen extends StatefulWidget {
   final Ticket ticket;
-  const TicketDetailScreen({super.key, required this.ticket});
+  final bool isManager; // manager sees assign/escalate; agent sees draft/reply
+
+  const TicketDetailScreen({
+    super.key,
+    required this.ticket,
+    this.isManager = false,
+  });
 
   @override
   State<TicketDetailScreen> createState() => _TicketDetailScreenState();
@@ -87,6 +95,12 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
           'aiClassifiedAt'        : FieldValue.serverTimestamp(),
           'aiClassificationFailed': false,
         });
+
+        // Set SLA deadline based on classified urgency (fire-and-forget)
+        EscalationService.setSlaDeadline(
+          widget.ticket.ticketId,
+          result['urgency'] ?? 'medium',
+        );
 
         if (mounted) setState(() => _classifying = false);
         return;
@@ -251,6 +265,193 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
 
   Future<void> _assignToMe() => _update({'assignedTo': _uid, 'status': 'assigned'});
 
+  // ── Manager: Assign an agent ──────────────────────────────────────────────
+  Future<void> _showAssignAgentSheet(BuildContext ctx) async {
+    final agentsSnap = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'agent')
+        .get();
+
+    if (!ctx.mounted) return;
+
+    showModalBottomSheet(
+      context: ctx,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (sheetCtx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.55,
+        maxChildSize: 0.85,
+        builder: (_, ctrl) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+              child: Column(
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40, height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.black12,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Assign Agent',
+                        style: TextStyle(
+                            color: AppColors.darkNavy,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                  const Divider(height: 20),
+                ],
+              ),
+            ),
+            Expanded(
+              child: agentsSnap.docs.isEmpty
+                  ? const Center(
+                      child: Text('No agents found.',
+                          style: TextStyle(color: Colors.black45)))
+                  : ListView.separated(
+                      controller: ctrl,
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                      itemCount: agentsSnap.docs.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final doc  = agentsSnap.docs[i];
+                        final data = doc.data();
+                        final name  = data['name']  as String? ?? 'Unknown';
+                        final email = data['email'] as String? ?? '';
+                        final isCurrentlyAssigned =
+                            widget.ticket.assignedTo == doc.id;
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              vertical: 6, horizontal: 4),
+                          leading: CircleAvatar(
+                            backgroundColor: AppColors.skyBlue,
+                            child: Text(
+                              name.isNotEmpty ? name[0].toUpperCase() : 'A',
+                              style: const TextStyle(
+                                  color: AppColors.darkNavy,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          title: Text(name,
+                              style: const TextStyle(
+                                  color: AppColors.darkNavy,
+                                  fontWeight: FontWeight.w600)),
+                          subtitle: Text(email,
+                              style: const TextStyle(
+                                  color: Colors.black45, fontSize: 12)),
+                          trailing: isCurrentlyAssigned
+                              ? const Icon(Icons.check_circle,
+                                  color: Color(0xFF4CAF50))
+                              : null,
+                          onTap: () async {
+                            Navigator.pop(sheetCtx);
+                            await _assignAgent(doc.id, name);
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _assignAgent(String agentUid, String agentName) async {
+    setState(() => _actionLoading = true);
+    try {
+      final snap = await _ref.get();
+      final currentStatus = (snap.data() as Map<String, dynamic>?)?['status'] as String? ?? 'open';
+      final wasEscalated  = (snap.data() as Map<String, dynamic>?)?['isEscalated'] as bool? ?? false;
+      await _ref.update({
+        'assignedTo' : agentUid,
+        'status'     : currentStatus == 'open' ? 'assigned' : currentStatus,
+        // Assigning an agent resolves the escalation — removes from escalation list
+        if (wasEscalated) 'isEscalated': false,
+      });
+
+      final shortId = widget.ticket.ticketId.substring(0, 8).toUpperCase();
+      await NotificationService.createNotification(
+        userId  : agentUid,
+        type    : 'status_change',
+        ticketId: widget.ticket.ticketId,
+        message : 'You have been assigned ticket #$shortId by the manager',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Ticket assigned to $agentName'),
+          backgroundColor: const Color(0xFF4CAF50),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _actionLoading = false);
+    }
+  }
+
+  // ── Manager: Escalate ticket ──────────────────────────────────────────────
+  Future<void> _escalateTicket() async {
+    setState(() => _actionLoading = true);
+    try {
+      await _ref.update({
+        'isEscalated': true,
+        'escalatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Notify all managers
+      final managersSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', isEqualTo: 'manager')
+          .get();
+      final shortId = widget.ticket.ticketId.substring(0, 8).toUpperCase();
+      for (final m in managersSnap.docs) {
+        await NotificationService.createNotification(
+          userId  : m.id,
+          type    : 'escalation',
+          ticketId: widget.ticket.ticketId,
+          message : '⚠️ Ticket #$shortId has been manually escalated',
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Ticket marked as escalated'),
+          backgroundColor: Color(0xFFF44336),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _actionLoading = false);
+    }
+  }
+
   /// Status transition + notify the assigned agent
   Future<void> _transition(String newStatus) async {
     await _update({'status': newStatus});
@@ -289,9 +490,16 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text(
-          '#${widget.ticket.ticketId.substring(0, 8).toUpperCase()}',
-          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+        title: FutureBuilder<String>(
+          future: AgentCache.instance
+              .getName(widget.ticket.submittedBy ?? ''),
+          builder: (_, snap) => Text(
+            snap.data ?? '…',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600),
+          ),
         ),
       ),
       body: StreamBuilder<DocumentSnapshot>(
@@ -345,6 +553,9 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
 
   // ── Body ─────────────────────────────────────────────────────────────────────
   Widget _body(Ticket t) {
+    // For managers: hide status buttons once ticket is assigned
+    final showStatusButtons = !widget.isManager || t.assignedTo == null;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
       child: Column(
@@ -356,12 +567,11 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
           const SizedBox(height: 20),
           _messageSection(t),
           const SizedBox(height: 24),
-          if (t.assignedTo == null || t.assignedTo != _uid) ...[
-            _assignSection(),
-            const SizedBox(height: 20),
-          ],
-          ..._stateButtons(t.status),
-          _replySection(t),
+          // Assignment section — role-aware
+          _assignmentSection(t),
+          if (showStatusButtons) ..._stateButtons(t.status),
+          // Reply section — agents only
+          if (!widget.isManager) _replySection(t),
         ],
       ),
     );
@@ -440,20 +650,82 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
         ],
       );
 
-  // ── Assignment ───────────────────────────────────────────────────────────────
-  Widget _assignSection() => Column(
+  // ── Assignment — role-aware ───────────────────────────────────────────────
+  Widget _assignmentSection(Ticket t) {
+    if (widget.isManager) {
+      // Manager: Assign/Reassign + optional Escalate button
+      final alreadyAssigned = t.assignedTo != null;
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SectionLabel('ASSIGNMENT'),
           ActionButton(
-            label: 'Assign to me',
+            label: alreadyAssigned ? 'Reassign Agent' : 'Assign Agent',
             color: AppColors.navy,
-            icon: Icons.person_add_outlined,
+            icon: alreadyAssigned
+                ? Icons.swap_horiz_rounded
+                : Icons.person_add_outlined,
             isLoading: _actionLoading,
-            onTap: _assignToMe,
+            onTap: () => _showAssignAgentSheet(context),
           ),
+          const SizedBox(height: 12),
+          // Escalate button — only if not yet escalated
+          if (!t.isEscalated)
+            ActionButton(
+              label: 'Mark as Escalated',
+              color: const Color(0xFFF44336),
+              icon: Icons.warning_amber_rounded,
+              isLoading: _actionLoading,
+              onTap: _escalateTicket,
+            )
+          else
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF44336).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: const Color(0xFFF44336).withValues(alpha: 0.30)),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      color: Color(0xFFF44336), size: 18),
+                  SizedBox(width: 8),
+                  Text('This ticket is escalated',
+                      style: TextStyle(
+                          color: Color(0xFFF44336),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13)),
+                ],
+              ),
+            ),
+          const SizedBox(height: 20),
         ],
       );
+    }
+
+    // Agent: only show "Assign to me" if not already assigned to this agent
+    if (t.assignedTo != null && t.assignedTo == _uid) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionLabel('ASSIGNMENT'),
+        ActionButton(
+          label: 'Assign to me',
+          color: AppColors.navy,
+          icon: Icons.person_add_outlined,
+          isLoading: _actionLoading,
+          onTap: _assignToMe,
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
 
   // ── Reply section ─────────────────────────────────────────────────────────────
   Widget _replySection(Ticket t) {
